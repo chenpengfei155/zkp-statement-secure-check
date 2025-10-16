@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CirVerify - Circom Security Analyzer</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        .header {
+            background: #2d3748;
+            color: white;
+            padding: 20px 30px;
+            text-align: center;
+        }
+        .header h1 { font-size: 28px; margin-bottom: 5px; }
+        .header p { opacity: 0.8; font-size: 14px; }
+        .content { padding: 30px; }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        select, button, input[type="file"] {
+            padding: 10px 15px;
+            border: 1px solid #cbd5e0;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        select { flex: 1; min-width: 200px; }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        button:hover { background: #5568d3; transform: translateY(-1px); }
+        button:active { transform: translateY(0); }
+        button:disabled { background: #cbd5e0; cursor: not-allowed; }
+        .file-upload { display: none; }
+        .editor-container {
+            border: 1px solid #cbd5e0;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        .CodeMirror {
+            height: 400px;
+            font-size: 14px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        .result {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 5px;
+            padding: 20px;
+            margin-top: 20px;
+            display: none;
+        }
+        .result h3 {
+            margin-bottom: 15px;
+            color: #2d3748;
+        }
+        .result pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .error { background: #fff5f5; border-color: #feb2b2; color: #c53030; }
+        .success { background: #f0fff4; border-color: #9ae6b4; color: #276749; }
+        .warning { background: #fffaf0; border-color: #fbd38d; color: #c05621; }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
+        .spinner {
+            border: 3px solid #f3f4f6;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 CirVerify</h1>
+            <p>Static Security Analyzer for Circom Circuits</p>
+        </div>
+        <div class="content">
+            <div class="controls">
+                <select id="exampleSelect">
+                    <option value="">-- Select Example --</option>
+                    {% for name in examples.keys() %}
+                    <option value="{{ name }}">{{ name }}</option>
+                    {% endfor %}
+                </select>
+                <button onclick="document.getElementById('fileInput').click()">📁 Upload File</button>
+                <input type="file" id="fileInput" class="file-upload" accept=".circom">
+                <button id="analyzeBtn" onclick="analyze()">▶️ Analyze</button>
+                <button onclick="clearAll()">🗑️ Clear</button>
+            </div>
+            
+            <div class="editor-container">
+                <textarea id="codeInput"></textarea>
+            </div>
+            
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <p>Analyzing circuit...</p>
+            </div>
+            
+            <div id="result" class="result"></div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/clike/clike.min.js"></script>
+    <script>
+        const examples = {{ examples | tojson }};
+        
+        // Initialize CodeMirror
+        const editor = CodeMirror.fromTextArea(document.getElementById('codeInput'), {
+            mode: 'text/x-csrc',
+            theme: 'monokai',
+            lineNumbers: true,
+            matchBrackets: true,
+            indentUnit: 4,
+            indentWithTabs: false,
+            lineWrapping: true,
+            autoCloseBrackets: true,
+            placeholder: 'Enter your Circom code here or select an example...'
+        });
+        
+        // Load example
+        document.getElementById('exampleSelect').addEventListener('change', function() {
+            const example = this.value;
+            if (example && examples[example]) {
+                editor.setValue(examples[example]);
+            }
+        });
+        
+        // File upload
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('/upload', { method: 'POST', body: formData })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        showResult('error', data.error);
+                    } else {
+                        editor.setValue(data.code);
+                    }
+                })
+                .catch(err => showResult('error', 'Upload failed: ' + err.message));
+        });
+        
+        // Analyze
+        async function analyze() {
+            const code = editor.getValue().trim();
+            if (!code) {
+                showResult('error', 'Please enter some Circom code');
+                return;
+            }
+            
+            const btn = document.getElementById('analyzeBtn');
+            const loading = document.getElementById('loading');
+            const result = document.getElementById('result');
+            
+            btn.disabled = true;
+            loading.style.display = 'block';
+            result.style.display = 'none';
+            
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    showResult('error', data.error);
+                } else {
+                    showResult('success', data.result);
+                }
+            } catch (err) {
+                showResult('error', 'Analysis failed: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                loading.style.display = 'none';
+            }
+        }
+        
+        // Show result
+        function showResult(type, message) {
+            const result = document.getElementById('result');
+            result.className = 'result ' + type;
+            result.innerHTML = '<h3>' + (type === 'error' ? '❌ Error' : '✅ Analysis Result') + '</h3><pre>' + message + '</pre>';
+            result.style.display = 'block';
+        }
+        
+        // Clear all
+        function clearAll() {
+            editor.setValue('');
+            document.getElementById('exampleSelect').value = '';
+            document.getElementById('result').style.display = 'none';
+        }
+        
+        // Keyboard shortcut: Ctrl/Cmd + Enter to analyze
+        editor.setOption('extraKeys', {
+            'Ctrl-Enter': analyze,
+            'Cmd-Enter': analyze
+        });
+    </script>
+</body>
+</html>
+
