@@ -1,5 +1,6 @@
 *.txt
 backup
+temp.circom
 *.egg-info
 *.json
 tmp
