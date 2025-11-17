@@ -56,16 +56,131 @@
         button:active { transform: translateY(0); }
         button:disabled { background: #cbd5e0; cursor: not-allowed; }
         .file-upload { display: none; }
-        .editor-container {
+        .workspace-container {
+            display: flex;
             border: 1px solid #cbd5e0;
             border-radius: 5px;
             margin-bottom: 20px;
             overflow: hidden;
+            height: 500px;
+        }
+        .file-explorer {
+            width: 250px;
+            background: #1e1e1e;
+            color: #cccccc;
+            border-right: 1px solid #3e3e3e;
+            overflow-y: auto;
+            overflow-x: hidden;
+            font-size: 13px;
+        }
+        .file-explorer-header {
+            padding: 8px 12px;
+            background: #252526;
+            border-bottom: 1px solid #3e3e3e;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #cccccc;
+        }
+        .file-tree {
+            padding: 4px 0;
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 4px 8px 4px 12px;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.1s;
+        }
+        .file-item:hover {
+            background: #2a2d2e;
+        }
+        .file-item.active {
+            background: #094771;
+        }
+        .file-icon {
+            width: 16px;
+            height: 16px;
+            margin-right: 6px;
+            display: inline-block;
+            text-align: center;
+            font-size: 14px;
+        }
+        .file-name {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .folder-toggle {
+            width: 16px;
+            height: 16px;
+            margin-right: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 10px;
+        }
+        .folder-toggle::before {
+            content: '▶';
+            transition: transform 0.2s;
+        }
+        .folder-toggle.expanded::before {
+            transform: rotate(90deg);
+        }
+        .folder-children {
+            margin-left: 16px;
+            display: none;
+        }
+        .folder-children.expanded {
+            display: block;
+        }
+        .editor-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #1e1e1e;
+        }
+        .editor-tabs {
+            display: flex;
+            background: #2d2d2d;
+            border-bottom: 1px solid #3e3e3e;
+            overflow-x: auto;
+        }
+        .editor-tab {
+            padding: 8px 16px;
+            background: #2d2d2d;
+            color: #cccccc;
+            border-right: 1px solid #3e3e3e;
+            cursor: pointer;
+            white-space: nowrap;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .editor-tab:hover {
+            background: #37373d;
+        }
+        .editor-tab.active {
+            background: #1e1e1e;
+            color: #ffffff;
+        }
+        .editor-tab-close {
+            opacity: 0.6;
+            cursor: pointer;
+            padding: 2px 4px;
+        }
+        .editor-tab-close:hover {
+            opacity: 1;
         }
         .CodeMirror {
-            height: 400px;
+            flex: 1;
             font-size: 14px;
             font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            height: 100%;
         }
         .result {
             background: #f7fafc;
@@ -105,6 +220,85 @@
             margin: 0 auto 10px;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .folder-result {
+            margin-top: 10px;
+            padding: 15px;
+            border: 1px solid #e2e8f0;
+            border-radius: 5px;
+            background: #f7fafc;
+        }
+        .folder-result-header {
+            font-weight: 600;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .file-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-left: 3px solid #cbd5e0;
+            background: white;
+        }
+        .file-result.success { border-left-color: #9ae6b4; }
+        .file-result.error { border-left-color: #feb2b2; }
+        .file-result-header {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .progress-info {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #edf2f7;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .progress-container {
+            display: none;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 5px;
+        }
+        .progress-bar-container {
+            width: 100%;
+            height: 24px;
+            background: #e2e8f0;
+            border-radius: 12px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .progress-text {
+            font-size: 13px;
+            color: #4a5568;
+            margin-top: 5px;
+        }
+        .progress-log {
+            max-height: 200px;
+            overflow-y: auto;
+            background: #1e1e1e;
+            color: #cccccc;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        .progress-log-line {
+            margin: 2px 0;
+            white-space: pre-wrap;
+        }
     </style>
 </head>
 <body>
@@ -123,17 +317,36 @@
                 </select>
                 <button onclick="document.getElementById('fileInput').click()">📁 Upload File</button>
                 <input type="file" id="fileInput" class="file-upload" accept=".circom">
+                <button onclick="document.getElementById('folderInput').click()">📂 Select Folder</button>
+                <input type="file" id="folderInput" class="file-upload" webkitdirectory directory multiple>
                 <button id="analyzeBtn" onclick="analyze()">▶️ Analyze</button>
+                <button id="stopBtn" onclick="stopAnalysis()" style="display: none; background: #e53e3e;">⏹️ Stop</button>
                 <button onclick="clearAll()">🗑️ Clear</button>
             </div>
             
-            <div class="editor-container">
-                <textarea id="codeInput"></textarea>
+            <div class="workspace-container">
+                <div class="file-explorer">
+                    <div class="file-explorer-header">📁 Explorer</div>
+                    <div class="file-tree" id="fileTree"></div>
+                </div>
+                <div class="editor-container">
+                    <div class="editor-tabs" id="editorTabs"></div>
+                    <textarea id="codeInput"></textarea>
+                </div>
             </div>
             
             <div id="loading" class="loading">
                 <div class="spinner"></div>
                 <p>Analyzing circuit...</p>
+            </div>
+            
+            <div id="progressContainer" class="progress-container">
+                <h4 style="margin-bottom: 10px;">📊 Analysis Progress</h4>
+                <div class="progress-bar-container">
+                    <div id="progressBar" class="progress-bar" style="width: 0%;">0%</div>
+                </div>
+                <div id="progressText" class="progress-text">Initializing...</div>
+                <div id="progressLog" class="progress-log"></div>
             </div>
             
             <div id="result" class="result"></div>
@@ -144,6 +357,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/clike/clike.min.js"></script>
     <script>
         const examples = {{ examples | tojson }};
+        
+        // File tree and editor management
+        let fileTree = {};
+        let openFiles = {};
+        let activeFile = null;
         
         // Initialize CodeMirror
         const editor = CodeMirror.fromTextArea(document.getElementById('codeInput'), {
@@ -157,6 +375,197 @@
             autoCloseBrackets: true,
             placeholder: 'Enter your Circom code here or select an example...'
         });
+        
+        // Build file tree from files
+        function buildFileTree(files) {
+            const tree = {};
+            files.forEach(file => {
+                const path = file.webkitRelativePath || file.name;
+                const parts = path.split('/');
+                let current = tree;
+                parts.forEach((part, index) => {
+                    if (index === parts.length - 1) {
+                        // File
+                        current[part] = { type: 'file', file: file, path: path };
+                    } else {
+                        // Folder
+                        if (!current[part]) {
+                            current[part] = { type: 'folder', children: {}, expanded: true };
+                        }
+                        current = current[part].children;
+                    }
+                });
+            });
+            return tree;
+        }
+        
+        // Render file tree
+        function renderFileTree(tree, container, level = 0) {
+            container.innerHTML = '';
+            const sortedKeys = Object.keys(tree).sort((a, b) => {
+                const aIsFolder = tree[a].type === 'folder';
+                const bIsFolder = tree[b].type === 'folder';
+                if (aIsFolder && !bIsFolder) return -1;
+                if (!aIsFolder && bIsFolder) return 1;
+                return a.localeCompare(b);
+            });
+            
+            sortedKeys.forEach(key => {
+                const item = tree[key];
+                const div = document.createElement('div');
+                div.className = 'file-item';
+                div.style.paddingLeft = `${12 + level * 16}px`;
+                
+                if (item.type === 'folder') {
+                    const toggle = document.createElement('span');
+                    toggle.className = `folder-toggle ${item.expanded ? 'expanded' : ''}`;
+                    toggle.onclick = (e) => {
+                        e.stopPropagation();
+                        item.expanded = !item.expanded;
+                        // Re-render the entire tree from root
+                        const rootContainer = document.getElementById('fileTree');
+                        renderFileTree(fileTree, rootContainer);
+                    };
+                    
+                    const icon = document.createElement('span');
+                    icon.className = 'file-icon';
+                    icon.textContent = '📁';
+                    
+                    const name = document.createElement('span');
+                    name.className = 'file-name';
+                    name.textContent = key;
+                    
+                    div.appendChild(toggle);
+                    div.appendChild(icon);
+                    div.appendChild(name);
+                    
+                    if (item.expanded) {
+                        const childrenDiv = document.createElement('div');
+                        childrenDiv.className = 'folder-children expanded';
+                        renderFileTree(item.children, childrenDiv, level + 1);
+                        div.appendChild(childrenDiv);
+                    }
+                } else {
+                    const icon = document.createElement('span');
+                    icon.className = 'file-icon';
+                    icon.textContent = '📄';
+                    
+                    const name = document.createElement('span');
+                    name.className = 'file-name';
+                    name.textContent = key;
+                    
+                    div.appendChild(icon);
+                    div.appendChild(name);
+                    
+                    div.onclick = () => openFile(item.path, item.file);
+                    if (activeFile === item.path) {
+                        div.classList.add('active');
+                    }
+                }
+                
+                container.appendChild(div);
+            });
+        }
+        
+        // Open file in editor
+        async function openFile(path, file) {
+            if (openFiles[path]) {
+                // File already open, switch to it
+                switchToFile(path);
+                return;
+            }
+            
+            // Read file content
+            let content = '';
+            if (file instanceof File) {
+                content = await file.text();
+            } else if (file && file.content) {
+                content = file.content;
+            }
+            
+            // Store file
+            openFiles[path] = {
+                path: path,
+                content: content,
+                file: file
+            };
+            
+            // Add tab
+            addTab(path);
+            
+            // Switch to file
+            switchToFile(path);
+        }
+        
+        // Add editor tab
+        function addTab(path) {
+            const tabsContainer = document.getElementById('editorTabs');
+            const tab = document.createElement('div');
+            tab.className = 'editor-tab';
+            tab.dataset.path = path;
+            
+            const fileName = path.split('/').pop();
+            const fileNameSpan = document.createElement('span');
+            fileNameSpan.textContent = fileName;
+            
+            const closeBtn = document.createElement('span');
+            closeBtn.className = 'editor-tab-close';
+            closeBtn.textContent = '×';
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                closeTab(path, e);
+            };
+            
+            tab.appendChild(fileNameSpan);
+            tab.appendChild(closeBtn);
+            tab.onclick = () => switchToFile(path);
+            tabsContainer.appendChild(tab);
+        }
+        
+        // Switch to file
+        function switchToFile(path) {
+            if (!openFiles[path]) return;
+            
+            activeFile = path;
+            editor.setValue(openFiles[path].content);
+            
+            // Update tabs
+            document.querySelectorAll('.editor-tab').forEach(tab => {
+                if (tab.dataset.path === path) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+            
+            // Update file tree
+            renderFileTree(fileTree, document.getElementById('fileTree'));
+        }
+        
+        // Close tab
+        function closeTab(path, event) {
+            event.stopPropagation();
+            delete openFiles[path];
+            
+            // Remove tab
+            const tab = document.querySelector(`.editor-tab[data-path="${path}"]`);
+            if (tab) tab.remove();
+            
+            // Switch to another file if this was active
+            if (activeFile === path) {
+                const remainingTabs = document.querySelectorAll('.editor-tab');
+                if (remainingTabs.length > 0) {
+                    const lastTab = remainingTabs[remainingTabs.length - 1];
+                    switchToFile(lastTab.dataset.path);
+                } else {
+                    activeFile = null;
+                    editor.setValue('');
+                }
+            }
+            
+            // Update file tree
+            renderFileTree(fileTree, document.getElementById('fileTree'));
+        }
         
         // Load example
         document.getElementById('exampleSelect').addEventListener('change', function() {
@@ -180,11 +589,43 @@
                     if (data.error) {
                         showResult('error', data.error);
                     } else {
-                        editor.setValue(data.code);
+                        // Build file tree with single file
+                        const fileObj = { name: file.name, content: data.code };
+                        fileTree = { [file.name]: { type: 'file', file: fileObj, path: file.name } };
+                        renderFileTree(fileTree, document.getElementById('fileTree'));
+                        openFile(file.name, fileObj);
                     }
                 })
                 .catch(err => showResult('error', 'Upload failed: ' + err.message));
         });
+        
+        // Folder upload and analyze
+        document.getElementById('folderInput').addEventListener('change', function(e) {
+            const files = Array.from(e.target.files);
+            if (files.length === 0) return;
+            
+            // Filter only .circom files
+            const circomFiles = files.filter(f => f.name.endsWith('.circom'));
+            if (circomFiles.length === 0) {
+                showResult('error', 'No .circom files found in the selected folder');
+                return;
+            }
+            
+            // Build and render file tree
+            fileTree = buildFileTree(circomFiles);
+            renderFileTree(fileTree, document.getElementById('fileTree'));
+            
+            // Open first file automatically
+            if (circomFiles.length > 0) {
+                const firstFile = circomFiles[0];
+                const path = firstFile.webkitRelativePath || firstFile.name;
+                openFile(path, firstFile);
+            }
+        });
+        
+        // Global variables for analysis control
+        let currentEventSource = null;
+        let currentSessionId = null;
         
         // Analyze
         async function analyze() {
@@ -195,14 +636,26 @@
             }
             
             const btn = document.getElementById('analyzeBtn');
+            const stopBtn = document.getElementById('stopBtn');
             const loading = document.getElementById('loading');
             const result = document.getElementById('result');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const progressLog = document.getElementById('progressLog');
             
             btn.disabled = true;
+            stopBtn.style.display = 'inline-block';
             loading.style.display = 'block';
             result.style.display = 'none';
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+            progressText.textContent = 'Starting analysis...';
+            progressLog.innerHTML = '';
             
             try {
+                // Start analysis and get session ID
                 const response = await fetch('/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -213,8 +666,132 @@
                 
                 if (data.error) {
                     showResult('error', data.error);
+                    progressContainer.style.display = 'none';
+                    stopBtn.style.display = 'none';
+                    return;
+                }
+                
+                // Connect to progress stream
+                currentSessionId = data.session_id;
+                currentEventSource = new EventSource(`/progress/${currentSessionId}`);
+                
+                currentEventSource.onmessage = function(event) {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'progress') {
+                        const progressData = message.data;
+                        
+                        // Update progress bar
+                        if (progressData.percent !== undefined) {
+                            progressBar.style.width = progressData.percent + '%';
+                            progressBar.textContent = progressData.percent + '%';
+                            progressText.textContent = `${progressData.current}/${progressData.total} ${progressData.time || ''}`;
+                        } else if (progressData.message) {
+                            progressText.textContent = progressData.message;
+                        }
+                        
+                        // Add to log
+                        if (message.raw) {
+                            const logLine = document.createElement('div');
+                            logLine.className = 'progress-log-line';
+                            logLine.textContent = message.raw.trim();
+                            progressLog.appendChild(logLine);
+                            progressLog.scrollTop = progressLog.scrollHeight;
+                        }
+                    } else if (message.type === 'complete') {
+                        progressBar.style.width = '100%';
+                        progressBar.textContent = '100%';
+                        progressText.textContent = 'Analysis completed!';
+                        cleanupAnalysis();
+                        showResult('success', message.result);
+                    } else if (message.type === 'cancelled') {
+                        progressText.textContent = 'Analysis cancelled';
+                        progressBar.style.background = '#e53e3e';
+                        cleanupAnalysis();
+                        showResult('warning', 'Analysis was cancelled by user');
+                    } else if (message.type === 'error') {
+                        cleanupAnalysis();
+                        showResult('error', message.message);
+                    } else if (message.type === 'done') {
+                        cleanupAnalysis();
+                    }
+                };
+                
+                currentEventSource.onerror = function(err) {
+                    console.error('EventSource error:', err);
+                    cleanupAnalysis();
+                    showResult('error', 'Connection error. Please try again.');
+                };
+            } catch (err) {
+                showResult('error', 'Analysis failed: ' + err.message);
+                progressContainer.style.display = 'none';
+                stopBtn.style.display = 'none';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        
+        // Stop analysis
+        async function stopAnalysis() {
+            if (currentSessionId) {
+                try {
+                    await fetch(`/stop/${currentSessionId}`, { method: 'POST' });
+                } catch (err) {
+                    console.error('Failed to stop analysis:', err);
+                }
+            }
+            cleanupAnalysis();
+        }
+        
+        // Cleanup analysis state
+        function cleanupAnalysis() {
+            if (currentEventSource) {
+                currentEventSource.close();
+                currentEventSource = null;
+            }
+            currentSessionId = null;
+            
+            const btn = document.getElementById('analyzeBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const loading = document.getElementById('loading');
+            const progressContainer = document.getElementById('progressContainer');
+            
+            btn.disabled = false;
+            stopBtn.style.display = 'none';
+            loading.style.display = 'none';
+            progressContainer.style.display = 'none';
+        }
+        
+        // Analyze folder
+        async function analyzeFolder(files) {
+            const btn = document.getElementById('analyzeBtn');
+            const loading = document.getElementById('loading');
+            const result = document.getElementById('result');
+            
+            btn.disabled = true;
+            loading.style.display = 'block';
+            result.style.display = 'none';
+            
+            try {
+                const formData = new FormData();
+                files.forEach((file, index) => {
+                    formData.append(`file_${index}`, file);
+                    // Include relative path if available (for folder uploads)
+                    const relativePath = file.webkitRelativePath || file.name;
+                    formData.append(`path_${index}`, relativePath);
+                });
+                
+                const response = await fetch('/analyze_folder', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    showResult('error', data.error);
                 } else {
-                    showResult('success', data.result);
+                    showFolderResult(data);
                 }
             } catch (err) {
                 showResult('error', 'Analysis failed: ' + err.message);
@@ -224,19 +801,69 @@
             }
         }
         
+        // Show folder analysis result
+        function showFolderResult(data) {
+            const result = document.getElementById('result');
+            result.className = 'result success';
+            
+            let html = '<h3>📂 Folder Analysis Results</h3>';
+            html += `<div class="progress-info">`;
+            html += `Total files: ${data.total_files} | `;
+            html += `✅ Success: ${data.success_count} | `;
+            html += `❌ Failed: ${data.fail_count}`;
+            html += `</div>`;
+            
+            data.results.forEach((fileResult, index) => {
+                const resultClass = fileResult.success ? 'success' : 'error';
+                html += `<div class="folder-result">`;
+                html += `<div class="file-result ${resultClass}">`;
+                html += `<div class="file-result-header">`;
+                html += `[${fileResult.index}/${fileResult.total}] ${escapeHtml(fileResult.file)}`;
+                html += `</div>`;
+                
+                if (fileResult.success) {
+                    html += `<pre style="margin: 0; padding: 10px; background: #f7fafc; border-radius: 3px; font-size: 12px;">${escapeHtml(fileResult.result)}</pre>`;
+                } else {
+                    html += `<div style="color: #c53030; padding: 10px; background: #fff5f5; border-radius: 3px;">❌ ${escapeHtml(fileResult.error)}</div>`;
+                }
+                html += `</div>`;
+                html += `</div>`;
+            });
+            
+            result.innerHTML = html;
+            result.style.display = 'block';
+        }
+        
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
         // Show result
         function showResult(type, message) {
             const result = document.getElementById('result');
             result.className = 'result ' + type;
-            result.innerHTML = '<h3>' + (type === 'error' ? '❌ Error' : '✅ Analysis Result') + '</h3><pre>' + message + '</pre>';
+            result.innerHTML = '<h3>' + (type === 'error' ? '❌ Error' : '✅ Analysis Result') + '</h3><pre>' + escapeHtml(message) + '</pre>';
             result.style.display = 'block';
         }
         
         // Clear all
         function clearAll() {
+            // Stop any running analysis
+            if (currentSessionId) {
+                stopAnalysis();
+            }
+            
             editor.setValue('');
             document.getElementById('exampleSelect').value = '';
             document.getElementById('result').style.display = 'none';
+            fileTree = {};
+            openFiles = {};
+            activeFile = null;
+            document.getElementById('fileTree').innerHTML = '';
+            document.getElementById('editorTabs').innerHTML = '';
         }
         
         // Keyboard shortcut: Ctrl/Cmd + Enter to analyze
