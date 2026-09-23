@@ -13,7 +13,6 @@ fi
 echo "Installing packages..."
 source venv/bin/activate
 pip install -q --upgrade pip
-pip install -q -r requirements.txt
 pip install -q -e .
 
 # Run demo

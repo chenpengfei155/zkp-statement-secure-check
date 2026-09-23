@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CirVerify - Circom Security Analyzer</title>
+    <title>CirVerify - Circom Analyzer & R1CS Viewer</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css">
     <style>
@@ -138,12 +138,14 @@
             display: block;
         }
         .editor-container {
+            min-width: 0;
             flex: 1;
             display: flex;
             flex-direction: column;
             background: #1e1e1e;
         }
         .editor-tabs {
+            flex-shrink: 0;
             display: flex;
             background: #2d2d2d;
             border-bottom: 1px solid #3e3e3e;
@@ -204,6 +206,23 @@
         .error { background: #fff5f5; border-color: #feb2b2; color: #c53030; }
         .success { background: #f0fff4; border-color: #9ae6b4; color: #276749; }
         .warning { background: #fffaf0; border-color: #fbd38d; color: #c05621; }
+        .result.r1cs-report { background: #1c1f28; color: #e1e7f0; border-color: #343b4c; border-radius: 10px; }
+        .r1cs-report h3 { color: #eef2ff; margin-bottom: 6px; }
+        .r1cs-report p { line-height: 1.7; margin: 8px 0; overflow-wrap: anywhere; }
+        .r1cs-report .report-meta { color: #a3adbf; font-size: 13px; }
+        .r1cs-report .report-notice { padding: 12px 16px; background: #292b40; border-left: 3px solid #a89bfa; border-radius: 4px; }
+        .r1cs-report .report-findings { display: grid; gap: 10px; margin: 16px 0; }
+        .r1cs-report .report-finding { padding: 12px 16px; background: #242833; border: 1px solid #343b4c; border-radius: 6px; }
+        .r1cs-report .report-error { border-left: 3px solid #fca5a5; }
+        .r1cs-report .report-warning { border-left: 3px solid #f5c876; }
+        .r1cs-report .report-evidence { color: #b5c1d8; font-family: Consolas, monospace; font-size: 13px; }
+        .r1cs-report .report-table-wrap { overflow-x: auto; }
+        .r1cs-report table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .r1cs-report th, .r1cs-report td { text-align: left; padding: 12px; border-bottom: 1px solid #343b4c; vertical-align: top; }
+        .r1cs-report th { color: #a3adbf; font-weight: 500; }
+        .r1cs-report .coverage-status { white-space: nowrap; color: #f5c876; }
+        .r1cs-report .coverage-unavailable { color: #a3adbf; }
+        .r1cs-analysis-hint { color: #a3adbf; font-size: 13px; line-height: 1.6; margin: 12px 0; }
         .loading {
             display: none;
             text-align: center;
@@ -299,13 +318,84 @@
             margin: 2px 0;
             white-space: pre-wrap;
         }
+        [hidden] { display: none !important; }
+        .workspace-container.r1cs-active { height: clamp(520px, calc(100vh - 245px), 860px); }
+        .r1cs-panel {
+            --r1cs-muted: #a3adbf;
+            flex: 1; min-height: 0; overflow: auto; padding: 16px 22px;
+            background: #1b1e27; color: #e5e9f2; color-scheme: dark;
+            scrollbar-color: #444b60 #1b1e27;
+        }
+        .r1cs-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+        .r1cs-file-icon {
+            display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 40px;
+            border: 1px solid #454665; border-radius: 10px; background: #2c2c44;
+            font: 600 18px Consolas, monospace; color: #b9adff;
+        }
+        .r1cs-heading-text { min-width: 0; flex: 1; }
+        .r1cs-panel .r1cs-filename { font-size: 19px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+        .r1cs-file-meta { color: var(--r1cs-muted); font-size: 12px; margin-top: 4px; }
+        .r1cs-readonly { flex-shrink: 0; color: #b8bfd0; font-size: 11px; border: 1px solid #3a4050; border-radius: 5px; padding: 4px 8px; }
+        .r1cs-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+        .r1cs-stat { min-width: 0; padding: 8px 12px; background: #242834; border: 1px solid #33394a; border-radius: 7px; }
+        .r1cs-stat dt { color: var(--r1cs-muted); font-size: 11px; line-height: 1.4; margin-bottom: 3px; }
+        .r1cs-stat dd { font-size: 22px; line-height: 1.15; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.5px; overflow-wrap: anywhere; }
+        .r1cs-stat:first-child { border-color: #4b476e; background: #2b293d; }
+        .r1cs-stat:first-child dd { color: #c0b3ff; }
+        .r1cs-details { margin-bottom: 8px; border-bottom: 1px solid #343a49; padding-bottom: 8px; font-size: 12px; }
+        .r1cs-details summary { color: #aeb7c9; cursor: pointer; width: fit-content; line-height: 1.6; }
+        .r1cs-details summary:hover { color: #e5e9f2; }
+        .r1cs-details-content { margin-top: 12px; display: grid; gap: 10px; line-height: 1.7; color: var(--r1cs-muted); }
+        .r1cs-prime-label { display: block; color: #c8d0df; margin-bottom: 5px; font-size: 11px; }
+        .r1cs-prime { display: block; padding: 9px 12px; border-radius: 5px; border: 1px solid #353c4d; background: #151922; color: #cfdaef; font: 12px/1.7 Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
+        .r1cs-toolbar { position: sticky; top: -16px; z-index: 1; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 6px 0; background: #1b1e27; }
+        .r1cs-section-title { font-size: 13px; font-weight: 600; }
+        .r1cs-equation-form { color: #818da5; font: 11px Consolas, monospace; margin-left: 8px; font-weight: normal; }
+        .r1cs-toolbar-actions { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+        .r1cs-toolbar label { color: var(--r1cs-muted); font-size: 11px; }
+        .r1cs-toolbar select { min-width: 165px; width: auto; flex: 0 0 auto; font-size: 12px; padding: 7px 9px; background: #272c39; border: 1px solid #424a5f; color: #e5e9f2; border-radius: 5px; }
+        .r1cs-pager { display: flex; gap: 4px; }
+        .r1cs-pager button { font-size: 12px; padding: 7px 10px; background: #303747; border: 1px solid #424a5f; color: #dce3f1; border-radius: 5px; }
+        .r1cs-pager button:hover:not(:disabled) { background: #404760; transform: none; }
+        .r1cs-pager button:disabled { color: #626d84; background: #222733; border-color: #303646; }
+        .r1cs-panel :is(button, select, summary):focus-visible { outline: 2px solid #afa0ff; outline-offset: 3px; }
+        .r1cs-status { color: var(--r1cs-muted); font-size: 11px; min-height: 14px; margin: 0 0 8px; font-variant-numeric: tabular-nums; }
+        .r1cs-panel .error-text { color: #f7a7ab; }
+        .r1cs-constraints { border: 1px solid #343b4c; border-radius: 7px; overflow: hidden; background: #171b24; }
+        .r1cs-constraints:empty { display: none; }
+        .r1cs-constraint { display: grid; grid-template-columns: 45px minmax(0, 1fr); border-top: 1px solid #2b3241; }
+        .r1cs-constraint:first-child { border-top: 0; }
+        .r1cs-constraint:hover { background: #202636; }
+        .r1cs-constraint > span { color: #8490a9; background: #1e2330; border-right: 1px solid #2b3241; padding: 9px 6px; text-align: center; font: 11px/1.8 Consolas, monospace; user-select: none; }
+        .r1cs-constraint pre { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; padding: 8px 16px; color: #d9e3fa; font: 14px/1.6 Consolas, Monaco, monospace; }
+        @media (max-width: 700px) {
+            body { padding: 8px; }
+            .content { padding: 12px; }
+            .file-explorer { width: 130px; flex-shrink: 0; }
+            .r1cs-panel { padding: 16px; }
+            .r1cs-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .r1cs-heading { flex-wrap: wrap; }
+            .r1cs-readonly { display: none; }
+            .r1cs-toolbar { top: -16px; }
+            .r1cs-toolbar-actions { flex-wrap: wrap; }
+            .r1cs-stat { padding: 10px; }
+        }
+        @media (max-width: 480px) {
+            .workspace-container.r1cs-active .file-explorer { display: none; }
+            .r1cs-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .r1cs-file-icon { display: none; }
+            .r1cs-equation-form { display: none; }
+            .r1cs-toolbar select { min-width: 0; max-width: 100%; flex-shrink: 1; }
+            .r1cs-constraint { grid-template-columns: 30px minmax(0, 1fr); }
+            .r1cs-constraint pre { padding: 10px; font-size: 12px; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🔍 CirVerify</h1>
-            <p>Static Security Analyzer for Circom Circuits</p>
+            <p>Circom Security Analysis · R1CS Constraint Checks</p>
         </div>
         <div class="content">
             <div class="controls">
@@ -316,7 +406,7 @@
                     {% endfor %}
                 </select>
                 <button onclick="document.getElementById('fileInput').click()">📁 Upload File</button>
-                <input type="file" id="fileInput" class="file-upload" accept=".circom">
+                <input type="file" id="fileInput" class="file-upload" accept=".circom,.r1cs">
                 <button onclick="document.getElementById('folderInput').click()">📂 Select Folder</button>
                 <input type="file" id="folderInput" class="file-upload" webkitdirectory directory multiple>
                 <button id="analyzeBtn" onclick="analyze()">▶️ Analyze</button>
@@ -324,7 +414,7 @@
                 <button onclick="clearAll()">🗑️ Clear</button>
             </div>
             
-            <div class="workspace-container">
+            <div class="workspace-container" id="workspace">
                 <div class="file-explorer">
                     <div class="file-explorer-header">📁 Explorer</div>
                     <div class="file-tree" id="fileTree"></div>
@@ -332,6 +422,44 @@
                 <div class="editor-container">
                     <div class="editor-tabs" id="editorTabs"></div>
                     <textarea id="codeInput"></textarea>
+                    <section id="r1csPanel" class="r1cs-panel" hidden aria-label="R1CS constraint viewer">
+                        <div class="r1cs-heading">
+                            <span class="r1cs-file-icon" aria-hidden="true">{ }</span>
+                            <div class="r1cs-heading-text">
+                                <h2 class="r1cs-filename"></h2>
+                                <p class="r1cs-file-meta"></p>
+                            </div>
+                            <span class="r1cs-readonly">Read only</span>
+                        </div>
+                        <dl class="r1cs-summary"></dl>
+                        <details class="r1cs-details">
+                            <summary>Field modulus & reading guide</summary>
+                            <div class="r1cs-details-content">
+                                <div><span class="r1cs-prime-label">FIELD MODULUS · p</span><code class="r1cs-prime"></code></div>
+                                <p>All equations are modulo p. Signed coefficients display p−1 as −1;
+                                    Original shows the stored nonnegative values. The file is unchanged.</p>
+                                <p>w0 = 1 is the constant, included in the variable count. Other wires use numbered names;
+                                    original signal names and actual input values are unavailable.</p>
+                            </div>
+                        </details>
+                        <p class="r1cs-analysis-hint">Analyze 可检查约束中的部分问题；需要源码的检测项会标为“无法检查”。结果显示在下方。</p>
+                        <div class="r1cs-toolbar">
+                            <div class="r1cs-section-title">Constraints <span class="r1cs-equation-form">A × B − C = 0</span></div>
+                            <div class="r1cs-toolbar-actions">
+                                <label for="coefficientMode">Display</label>
+                                <select id="coefficientMode" data-action="coefficients">
+                                    <option value="signed">Signed / 简洁系数</option>
+                                    <option value="raw">Original / 原始系数</option>
+                                </select>
+                                <div class="r1cs-pager">
+                                    <button data-action="previous" aria-label="Previous page" title="Previous page" disabled>←</button>
+                                    <button data-action="next" aria-label="Next page" title="Next page" disabled>→</button>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="r1cs-status" role="status" aria-live="polite"></p>
+                        <div class="r1cs-constraints"></div>
+                    </section>
                 </div>
             </div>
             
@@ -355,6 +483,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/clike/clike.min.js"></script>
+    <script src="{{ url_for('static', filename='r1cs.js') }}"></script>
     <script>
         const examples = {{ examples | tojson }};
         
@@ -362,6 +491,11 @@
         let fileTree = {};
         let openFiles = {};
         let activeFile = null;
+        let scratchCode = '';
+        let workspaceGeneration = 0;
+        let uploadSequence = 0;
+        const latestUploads = new Map();
+        const r1csViewer = new R1CSViewer(document.getElementById('r1csPanel'));
         
         // Initialize CodeMirror
         const editor = CodeMirror.fromTextArea(document.getElementById('codeInput'), {
@@ -375,6 +509,25 @@
             autoCloseBrackets: true,
             placeholder: 'Enter your Circom code here or select an example...'
         });
+        editor.on('change', () => {
+            const state = openFiles[activeFile];
+            if (state && state.kind === 'circom') state.content = editor.getValue();
+            else if (!activeFile) scratchCode = editor.getValue();
+        });
+
+        function releaseR1CS(state) {
+            if (state && state.kind === 'r1cs') {
+                fetch(`/r1cs/${state.id}`, {method: 'DELETE', keepalive: true}).catch(() => {});
+            }
+        }
+
+        function showSourceWorkspace() {
+            r1csViewer.hide();
+            document.getElementById('workspace').classList.remove('r1cs-active');
+            editor.getWrapperElement().style.display = '';
+            document.getElementById('analyzeBtn').hidden = false;
+            editor.refresh();
+        }
         
         // Build file tree from files
         function buildFileTree(files) {
@@ -468,8 +621,9 @@
         }
         
         // Open file in editor
-        async function openFile(path, file) {
-            if (openFiles[path]) {
+        async function openFile(path, file, replace = false) {
+            const generation = workspaceGeneration;
+            if (openFiles[path] && !replace) {
                 // File already open, switch to it
                 switchToFile(path);
                 return;
@@ -477,21 +631,32 @@
             
             // Read file content
             let content = '';
-            if (file instanceof File) {
+            if (file && file.kind === 'r1cs') {
+                // Binary uploads have already been parsed by the server.
+            } else if (file instanceof File) {
                 content = await file.text();
-            } else if (file && file.content) {
+            } else if (file && typeof file.content === 'string') {
                 content = file.content;
             }
+            if (generation !== workspaceGeneration) return;
             
             // Store file
+            const existed = Boolean(openFiles[path]);
+            releaseR1CS(openFiles[path]);
             openFiles[path] = {
                 path: path,
+                kind: file.kind || 'circom',
                 content: content,
-                file: file
+                file: file,
+                id: file.id,
+                metadata: file.metadata,
+                offset: 0,
+                signed: true,
+                result: null
             };
             
             // Add tab
-            addTab(path);
+            if (!existed) addTab(path);
             
             // Switch to file
             switchToFile(path);
@@ -527,7 +692,19 @@
             if (!openFiles[path]) return;
             
             activeFile = path;
-            editor.setValue(openFiles[path].content);
+            const state = openFiles[path];
+            if (state.kind === 'r1cs') {
+                document.getElementById('workspace').classList.add('r1cs-active');
+                editor.getWrapperElement().style.display = 'none';
+                document.getElementById('analyzeBtn').hidden = false;
+                r1csViewer.show(state);
+            } else {
+                showSourceWorkspace();
+                editor.setValue(state.content);
+                editor.refresh();
+            }
+            document.getElementById('result').style.display = 'none';
+            if (state.result) showResult(state.result.type, state.result.message);
             
             // Update tabs
             document.querySelectorAll('.editor-tab').forEach(tab => {
@@ -545,10 +722,12 @@
         // Close tab
         function closeTab(path, event) {
             event.stopPropagation();
+            if (openFiles[path] && openFiles[path].kind === 'r1cs') delete fileTree[path];
+            releaseR1CS(openFiles[path]);
             delete openFiles[path];
             
             // Remove tab
-            const tab = document.querySelector(`.editor-tab[data-path="${path}"]`);
+            const tab = Array.from(document.querySelectorAll('.editor-tab')).find(t => t.dataset.path === path);
             if (tab) tab.remove();
             
             // Switch to another file if this was active
@@ -559,7 +738,9 @@
                     switchToFile(lastTab.dataset.path);
                 } else {
                     activeFile = null;
-                    editor.setValue('');
+                    showSourceWorkspace();
+                    editor.setValue(scratchCode);
+                    document.getElementById('result').style.display = 'none';
                 }
             }
             
@@ -571,32 +752,41 @@
         document.getElementById('exampleSelect').addEventListener('change', function() {
             const example = this.value;
             if (example && examples[example]) {
-                editor.setValue(examples[example]);
+                const name = `${example}.circom`;
+                const file = {name, kind: 'circom', content: examples[example]};
+                fileTree[name] = {type: 'file', file, path: name};
+                openFile(name, file, true);
             }
         });
         
         // File upload
-        document.getElementById('fileInput').addEventListener('change', function(e) {
+        document.getElementById('fileInput').addEventListener('change', async function(e) {
             const file = e.target.files[0];
+            e.target.value = '';
             if (!file) return;
+            const generation = workspaceGeneration;
+            const sequence = ++uploadSequence;
+            latestUploads.set(file.name, sequence);
             
             const formData = new FormData();
             formData.append('file', file);
             
-            fetch('/upload', { method: 'POST', body: formData })
-                .then(r => r.json())
-                .then(data => {
-                    if (data.error) {
-                        showResult('error', data.error);
-                    } else {
-                        // Build file tree with single file
-                        const fileObj = { name: file.name, content: data.code };
-                        fileTree = { [file.name]: { type: 'file', file: fileObj, path: file.name } };
-                        renderFileTree(fileTree, document.getElementById('fileTree'));
-                        openFile(file.name, fileObj);
-                    }
-                })
-                .catch(err => showResult('error', 'Upload failed: ' + err.message));
+            showResult('info', `Opening ${file.name}…`);
+            try {
+                const response = await fetch('/upload', {method: 'POST', body: formData});
+                const data = await response.json();
+                if (generation !== workspaceGeneration || latestUploads.get(file.name) !== sequence) {
+                    releaseR1CS(data);
+                    return;
+                }
+                if (!response.ok) throw new Error(data.error || 'Upload failed.');
+                const fileObj = {...data, name: file.name, content: data.code};
+                fileTree[file.name] = {type: 'file', file: fileObj, path: file.name};
+                await openFile(file.name, fileObj, true);
+            } catch (error) {
+                if (generation === workspaceGeneration && latestUploads.get(file.name) === sequence)
+                    showResult('error', error.message);
+            }
         });
         
         // Folder upload and analyze
@@ -626,11 +816,25 @@
         // Global variables for analysis control
         let currentEventSource = null;
         let currentSessionId = null;
+        let analysisGeneration = 0;
+        let analysisBusy = false;
         
         // Analyze
         async function analyze() {
-            const code = editor.getValue().trim();
-            if (!code) {
+            const sourceState = openFiles[activeFile];
+            if (analysisBusy) return;
+            const isR1CS = sourceState && sourceState.kind === 'r1cs';
+            const generation = ++analysisGeneration;
+            const publish = (type, message) => {
+                if (generation !== analysisGeneration) return;
+                if (sourceState) sourceState.result = {type, message};
+                if ((sourceState && openFiles[activeFile] === sourceState) || (!sourceState && !activeFile)) {
+                    showResult(type, message);
+                    if (type === 'r1cs') document.getElementById('result').scrollIntoView({behavior: 'smooth', block: 'start'});
+                }
+            };
+            const code = isR1CS ? '' : editor.getValue().trim();
+            if (!isR1CS && !code) {
                 showResult('error', 'Please enter some Circom code');
                 return;
             }
@@ -645,29 +849,33 @@
             const progressLog = document.getElementById('progressLog');
             
             btn.disabled = true;
+            analysisBusy = true;
             stopBtn.style.display = 'inline-block';
             loading.style.display = 'block';
             result.style.display = 'none';
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
             progressBar.textContent = '0%';
-            progressText.textContent = 'Starting analysis...';
+            progressText.textContent = isR1CS ? 'Checking R1CS constraints…' : 'Starting analysis...';
             progressLog.innerHTML = '';
             
             try {
                 // Start analysis and get session ID
-                const response = await fetch('/analyze', {
+                const response = await fetch(isR1CS ? `/r1cs/${sourceState.id}/analyze` : '/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code })
+                    body: JSON.stringify(isR1CS ? {} : { code })
                 });
                 
                 const data = await response.json();
+                if (generation !== analysisGeneration) {
+                    if (data.session_id) fetch(`/stop/${data.session_id}`, {method: 'POST'}).catch(() => {});
+                    return;
+                }
                 
-                if (data.error) {
-                    showResult('error', data.error);
-                    progressContainer.style.display = 'none';
-                    stopBtn.style.display = 'none';
+                if (!response.ok || data.error) {
+                    publish('error', data.error || 'Could not start analysis.');
+                    cleanupAnalysis();
                     return;
                 }
                 
@@ -676,6 +884,7 @@
                 currentEventSource = new EventSource(`/progress/${currentSessionId}`);
                 
                 currentEventSource.onmessage = function(event) {
+                    if (generation !== analysisGeneration) return;
                     const message = JSON.parse(event.data);
                     
                     if (message.type === 'progress') {
@@ -703,48 +912,52 @@
                         progressBar.textContent = '100%';
                         progressText.textContent = 'Analysis completed!';
                         cleanupAnalysis();
-                        showResult('success', message.result);
+                        if (isR1CS) publish('r1cs', {...message.result, filename: sourceState.metadata.filename});
+                        else publish('success', message.result);
                     } else if (message.type === 'cancelled') {
                         progressText.textContent = 'Analysis cancelled';
                         progressBar.style.background = '#e53e3e';
                         cleanupAnalysis();
-                        showResult('warning', 'Analysis was cancelled by user');
+                        publish('warning', 'Analysis was cancelled by user');
                     } else if (message.type === 'error') {
                         cleanupAnalysis();
-                        showResult('error', message.message);
+                        publish('error', message.message);
                     } else if (message.type === 'done') {
                         cleanupAnalysis();
                     }
                 };
                 
                 currentEventSource.onerror = function(err) {
+                    if (generation !== analysisGeneration) return;
                     console.error('EventSource error:', err);
                     cleanupAnalysis();
-                    showResult('error', 'Connection error. Please try again.');
+                    publish('error', 'Connection error. Please try again.');
                 };
             } catch (err) {
-                showResult('error', 'Analysis failed: ' + err.message);
-                progressContainer.style.display = 'none';
-                stopBtn.style.display = 'none';
-            } finally {
-                btn.disabled = false;
+                if (generation === analysisGeneration) {
+                    publish('error', 'Analysis failed: ' + err.message);
+                    cleanupAnalysis();
+                }
             }
         }
         
         // Stop analysis
         async function stopAnalysis() {
-            if (currentSessionId) {
+            const sessionId = currentSessionId;
+            analysisGeneration++;
+            cleanupAnalysis();
+            if (sessionId) {
                 try {
-                    await fetch(`/stop/${currentSessionId}`, { method: 'POST' });
+                    await fetch(`/stop/${sessionId}`, { method: 'POST' });
                 } catch (err) {
                     console.error('Failed to stop analysis:', err);
                 }
             }
-            cleanupAnalysis();
         }
         
         // Cleanup analysis state
         function cleanupAnalysis() {
+            analysisBusy = false;
             if (currentEventSource) {
                 currentEventSource.close();
                 currentEventSource = null;
@@ -844,18 +1057,28 @@
         // Show result
         function showResult(type, message) {
             const result = document.getElementById('result');
+            if (type === 'r1cs') {
+                renderR1CSReport(result, message);
+                return;
+            }
             result.className = 'result ' + type;
-            result.innerHTML = '<h3>' + (type === 'error' ? '❌ Error' : '✅ Analysis Result') + '</h3><pre>' + escapeHtml(message) + '</pre>';
+            const title = type === 'error' ? '❌ Error' : type === 'info' ? 'File Upload' : 'Analysis Result';
+            result.innerHTML = '<h3>' + title + '</h3><pre>' + escapeHtml(message) + '</pre>';
             result.style.display = 'block';
         }
         
         // Clear all
         function clearAll() {
             // Stop any running analysis
-            if (currentSessionId) {
+            if (analysisBusy) {
                 stopAnalysis();
             }
-            
+            workspaceGeneration++;
+            latestUploads.clear();
+            Object.values(openFiles).forEach(releaseR1CS);
+            r1csViewer.hide();
+            activeFile = null;
+            scratchCode = '';
             editor.setValue('');
             document.getElementById('exampleSelect').value = '';
             document.getElementById('result').style.display = 'none';
@@ -864,6 +1087,7 @@
             activeFile = null;
             document.getElementById('fileTree').innerHTML = '';
             document.getElementById('editorTabs').innerHTML = '';
+            showSourceWorkspace();
         }
         
         // Keyboard shortcut: Ctrl/Cmd + Enter to analyze

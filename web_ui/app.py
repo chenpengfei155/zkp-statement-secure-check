@@ -13,11 +13,18 @@ import queue
 import time
 from io import StringIO
 from pathlib import Path
+from werkzeug.exceptions import RequestEntityTooLarge
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from cirverify.core import detect, print_reports, report_to_file
+from cirverify.core import detect, print_reports
+from cirverify.r1cs import R1CSError
+from cirverify.r1cs_analysis import analyze_r1cs, AnalysisCancelled
+if __package__:
+    from .r1cs_store import R1CSStore
+else:
+    from r1cs_store import R1CSStore
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size for folder uploads
@@ -26,6 +33,40 @@ app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size for 
 progress_queues = {}
 analysis_threads = {}
 stop_flags = {}
+analysis_finished = {}
+analysis_lock = threading.Lock()
+r1cs_analysis_lock = threading.Lock()
+r1cs_store = R1CSStore()
+maintenance_lock = threading.Lock()
+maintenance_started = False
+
+
+def expire_resources():
+    r1cs_store.expire()
+    now = time.monotonic()
+    for session_id, finished in list(analysis_finished.items()):
+        if now - finished >= 30 * 60:
+            progress_queues.pop(session_id, None)
+            analysis_finished.pop(session_id, None)
+
+
+@app.before_request
+def start_maintenance():
+    """Start lazily so importing the app does not create a background worker."""
+    global maintenance_started
+    with maintenance_lock:
+        if not maintenance_started:
+            def maintain():
+                while True:
+                    time.sleep(60)
+                    expire_resources()
+            threading.Thread(target=maintain, daemon=True).start()
+            maintenance_started = True
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def upload_too_large(error):
+    return jsonify({'error': 'Upload exceeds the 100 MiB request limit (including form data).'}), 413
 
 class ProgressCapture:
     """Capture stdout/stderr and send to queue for SSE."""
@@ -107,19 +148,18 @@ def index():
 def analyze():
     """Analyze the provided Circom code with progress streaming."""
     import uuid
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get('code'), str) or not data['code'].strip():
+        return jsonify({'error': 'Please provide Circom source code.'}), 400
+    code = data['code'].strip()
     session_id = str(uuid.uuid4())
     progress_queue = queue.Queue()
     progress_queues[session_id] = progress_queue
     stop_flags[session_id] = threading.Event()
     
-    temp_dir = None
-    temp_path = None
-    
-    # Get data before starting thread
-    data = request.get_json()
-    code = data.get('code', '').strip()
-    
     def run_analysis():
+        temp_dir = None
+        temp_path = None
         try:
             if not code:
                 progress_queue.put(('error', 'No code provided'))
@@ -147,7 +187,7 @@ def analyze():
                 with open(temp_path, 'w', encoding='utf-8') as f:
                     f.write(code)
             else:
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.circom', delete=False) as f:
+                with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.circom', delete=False) as f:
                     f.write(code)
                     temp_path = f.name
             
@@ -156,47 +196,36 @@ def analyze():
                 progress_queue.put(('cancelled', 'Analysis cancelled by user'))
                 return
             
-            try:
-                # Run analysis with progress capture
-                with ProgressCapture(progress_queue) as capture:
-                    # Note: detect() function doesn't support cancellation directly
-                    # We can only cancel before it starts or after it completes
-                    graphs, reports = detect(temp_path)
-                    
-                    # Check if stopped during analysis
-                    if stop_flags.get(session_id, threading.Event()).is_set():
-                        progress_queue.put(('cancelled', 'Analysis cancelled by user'))
-                        return
-                    
-                    if not graphs or not reports:
-                        progress_queue.put(('error', 'Analysis failed. Check if the Circom code is valid.'))
-                        return
-                    
-                    # Capture printed output
-                    print_reports(graphs, reports)
-                    output = capture.getvalue()
-                    
-                    progress_queue.put(('complete', output if output else 'No issues detected! ✅'))
-            finally:
-                # Clean up temp file/directory
-                if temp_path and os.path.exists(temp_path):
-                    try:
-                        os.unlink(temp_path)
-                    except:
-                        pass
-                if temp_dir and os.path.exists(temp_dir):
-                    try:
-                        shutil.rmtree(temp_dir)
-                    except:
-                        pass
+            # stdout capture is process-wide, so source analyses must not overlap.
+            with analysis_lock, ProgressCapture(progress_queue) as capture:
+                if stop_flags[session_id].is_set():
+                    progress_queue.put(('cancelled', 'Analysis cancelled by user'))
+                    return
+                graphs, reports = detect(temp_path)
+                if stop_flags[session_id].is_set():
+                    progress_queue.put(('cancelled', 'Analysis cancelled by user'))
+                    return
+                if not graphs or not reports:
+                    progress_queue.put(('error', 'Analysis failed. Check if the Circom code is valid.'))
+                    return
+                print_reports(graphs, reports)
+                progress_queue.put(('complete', capture.getvalue()))
         except Exception as e:
             if not stop_flags.get(session_id, threading.Event()).is_set():
                 progress_queue.put(('error', str(e)))
         finally:
-            progress_queue.put(('done', None))
-            # Clean up session data
+            # Also clean up if cancelled between file creation and detection.
+            try:
+                if temp_path and os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                if temp_dir and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+            except OSError:
+                app.logger.exception('Could not clean up a source analysis temporary file')
+            # Keep results available for clients that connect after a fast analysis.
             if session_id in progress_queues:
-                del progress_queues[session_id]
+                analysis_finished[session_id] = time.monotonic()
+            progress_queue.put(('done', None))
             if session_id in stop_flags:
                 del stop_flags[session_id]
             if session_id in analysis_threads:
@@ -205,8 +234,8 @@ def analyze():
     # Run analysis in background thread
     thread = threading.Thread(target=run_analysis)
     thread.daemon = True
-    thread.start()
     analysis_threads[session_id] = thread
+    thread.start()
     
     return jsonify({'session_id': session_id})
 
@@ -231,28 +260,37 @@ def progress_stream(session_id):
             return
         
         q = progress_queues[session_id]
-        while True:
-            try:
-                msg_type, content = q.get(timeout=30)
-                
+        terminal_consumed = False
+        try:
+            while True:
+                try:
+                    msg_type, content = q.get(timeout=30)
+                except queue.Empty:
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                    continue
                 if msg_type == 'done':
+                    terminal_consumed = True
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
                     break
                 elif msg_type == 'error':
+                    terminal_consumed = True
                     yield f"data: {json.dumps({'type': 'error', 'message': content})}\n\n"
                 elif msg_type == 'cancelled':
+                    terminal_consumed = True
                     yield f"data: {json.dumps({'type': 'cancelled', 'message': content})}\n\n"
                 elif msg_type == 'complete':
+                    terminal_consumed = True
                     yield f"data: {json.dumps({'type': 'complete', 'result': content})}\n\n"
                 elif msg_type == 'output':
                     # Parse progress bar information
                     progress_data = parse_progress(content)
                     yield f"data: {json.dumps({'type': 'progress', 'data': progress_data, 'raw': content})}\n\n"
-            except queue.Empty:
-                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-                break
+                elif msg_type == 'progress':
+                    yield f"data: {json.dumps({'type': 'progress', 'data': content})}\n\n"
+        finally:
+            if terminal_consumed:
+                progress_queues.pop(session_id, None)
+                analysis_finished.pop(session_id, None)
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
@@ -297,31 +335,122 @@ def upload():
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
         
-        if not file.filename.endswith('.circom'):
-            return jsonify({'error': 'File must be a .circom file'}), 400
+        suffix = Path(file.filename).suffix.lower()
+        if suffix == '.r1cs':
+            return jsonify(r1cs_store.add(file))
+        if suffix != '.circom':
+            return jsonify({'error': 'Choose a .circom or .r1cs file. Symbol (.sym) files are not supported.'}), 400
         
         # Read file content
-        code = file.read().decode('utf-8')
-        return jsonify({'code': code})
+        code = file.read().decode('utf-8-sig')
+        if '\x00' in code:
+            return jsonify({'error': 'Circom source must be UTF-8 text, not a binary file.'}), 400
+        return jsonify({'kind': 'circom', 'code': code})
         
+    except RequestEntityTooLarge:
+        raise
+    except UnicodeDecodeError:
+        return jsonify({'error': 'Circom source must be a UTF-8 text file.'}), 400
+    except R1CSError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        app.logger.exception('Upload failed')
+        return jsonify({'error': 'Could not read the uploaded file.'}), 500
+
+
+@app.route('/r1cs/<file_id>/constraints')
+def r1cs_constraints(file_id):
+    try:
+        offset = int(request.args.get('offset', '0'))
+        limit = int(request.args.get('limit', '50'))
+        if offset < 0 or not 1 <= limit <= 50:
+            raise ValueError()
+    except ValueError:
+        return jsonify({'error': 'Offset must be nonnegative and limit must be between 1 and 50.'}), 400
+    try:
+        return jsonify(r1cs_store.page(file_id, offset, limit))
+    except KeyError:
+        return jsonify({'error': 'This R1CS file has expired or was closed. Please upload it again.'}), 404
+
+
+@app.route('/r1cs/<file_id>', methods=['DELETE'])
+def delete_r1cs(file_id):
+    r1cs_store.delete(file_id)
+    return jsonify({'success': True})
+
+
+@app.route('/r1cs/<file_id>/analyze', methods=['POST'])
+def analyze_r1cs_upload(file_id):
+    """Run bounded constraint checks; never pass compiled bytes to the source detector."""
+    import uuid
+    # One R1CS worker at a time bounds memory/CPU across browser tabs and clients.
+    if not r1cs_analysis_lock.acquire(blocking=False):
+        return jsonify({'error': 'An R1CS analysis is already running. Please wait or stop it.'}), 409
+    store = r1cs_store
+    try:
+        reader = store.acquire(file_id)
+    except KeyError:
+        r1cs_analysis_lock.release()
+        return jsonify({'error': 'This R1CS file has expired or was closed. Please upload it again.'}), 404
+    except Exception:
+        r1cs_analysis_lock.release()
+        raise
+    session_id = str(uuid.uuid4())
+    messages = queue.Queue()
+    cancelled = threading.Event()
+    progress_queues[session_id] = messages
+    stop_flags[session_id] = cancelled
+
+    def run():
+        try:
+            def progress(done, total):
+                messages.put(('progress', {'current': done, 'total': total,
+                                          'percent': round(100 * done / total) if total else 100,
+                                          'message': 'Checking compiled constraints'}))
+            report = analyze_r1cs(reader, cancelled=cancelled.is_set, progress=progress)
+            if cancelled.is_set():
+                raise AnalysisCancelled()
+            messages.put(('complete', report))
+        except AnalysisCancelled:
+            messages.put(('cancelled', 'Analysis cancelled by user'))
+        except Exception:
+            app.logger.exception('R1CS analysis failed')
+            messages.put(('error', 'Could not analyze this R1CS file. Please upload it again.'))
+        finally:
+            try:
+                store.release(file_id)
+            finally:
+                r1cs_analysis_lock.release()
+                if session_id in progress_queues:
+                    analysis_finished[session_id] = time.monotonic()
+                messages.put(('done', None))
+                stop_flags.pop(session_id, None)
+                analysis_threads.pop(session_id, None)
+
+    thread = threading.Thread(target=run, daemon=True)
+    analysis_threads[session_id] = thread
+    try:
+        thread.start()
+    except Exception:
+        store.release(file_id)
+        r1cs_analysis_lock.release()
+        progress_queues.pop(session_id, None)
+        stop_flags.pop(session_id, None)
+        analysis_threads.pop(session_id, None)
+        raise
+    return jsonify({'session_id': session_id})
 
 
 def analyze_single_file(file_path, project_root):
     """Analyze a single Circom file and return the result."""
     try:
-        graphs, reports = detect(file_path)
-        
-        if not graphs or not reports:
-            return {'success': False, 'error': 'Analysis failed. Check if the Circom code is valid.'}
-        
-        # Capture printed output
-        old_stdout = sys.stdout
-        sys.stdout = StringIO()
-        print_reports(graphs, reports)
-        output = sys.stdout.getvalue()
-        sys.stdout = old_stdout
+        with analysis_lock:
+            graphs, reports = detect(file_path)
+            if not graphs or not reports:
+                return {'success': False, 'error': 'Analysis failed. Check if the Circom code is valid.'}
+            with ProgressCapture(queue.Queue()) as capture:
+                print_reports(graphs, reports)
+                output = capture.getvalue()
         
         return {
             'success': True,
