@@ -279,8 +279,8 @@ Circom source report, follow the [CLI examples](#example-usage) and use `--json`
 3. Read equations in the form `A × B − C = 0`, with the **← / →** page buttons
    showing 50 constraints per page. Variables are named `w1`, `w2`, etc.; `w0 = 1`
    is the constant. Original signal names and actual input values are unavailable.
-4. **Signed / 简洁系数** is the default: for example, `p−1` appears as `−1`.
-   Select **Original / 原始系数** to display the original nonnegative coefficients.
+4. **Signed coefficients** is the default: for example, `p−1` appears as `−1`.
+   Select **Original coefficients** to display the original nonnegative coefficients.
    Both views describe the same arithmetic modulo the modulus stored in the file.
 5. Install Picus once as described below, then click **Analyze** for the uniqueness
    verdict, available counterexample and execution log.
@@ -316,6 +316,8 @@ it does not establish business correctness, satisfiability or general security.
 `unsafe` reports underconstraint, with available counterexamples. `unknown`
 means inconclusive, never passing. Errors and cancellation are shown separately.
 Files with no public outputs are reported as not applicable.
+Results use the same **Analysis Result** heading and text-log style as Circom,
+with English messages and expandable **Run details and raw logs**.
 For example, an output fixed to zero is unique, but may not implement the XOR
 operation you intended; functional correctness needs a separate specification.
 

@@ -69,9 +69,9 @@ counts and public/private input and public output counts. Expand **Field modulus
 page through 50 equations at a time in the form `A × B − C = 0`.
 
 Variables appear as `w1`, `w2`, etc.; `w0 = 1` is the constant. The file does not
-provide original names or actual input values. **Signed / 简洁系数** displays
+provide original names or actual input values. **Signed coefficients** displays
 equivalent small negative coefficients by default (`p−1` becomes `−1`);
-**Original / 原始系数** displays the original nonnegative coefficients. Both use
+**Original coefficients** displays the original nonnegative coefficients. Both use
 arithmetic modulo the file's prime, without changing the file.
 
 Source edits and R1CS view settings survive tab switching. Re-uploading a filename
@@ -86,6 +86,9 @@ Folder selection and the CLI remain Circom-only.
 
 Click **Analyze** after the [one-time Picus installation](../README.md#install-picus-once-windows--wsl).
 The report displays `safe`, `unsafe`, or `unknown`, plus elapsed time and logs.
+It uses Circom's **Analysis Result** heading, light result panel and English
+`[Info]`, `[Success]` or `[Warning]` text output. Counterexamples appear below the
+summary; **Run details and raw logs** retains the original Picus output.
 Picus checks unique public outputs for identical public and private inputs;
 it does not prove business correctness or general satisfiability. No public
 outputs means `not_applicable`, not a passing result. Counterexamples show

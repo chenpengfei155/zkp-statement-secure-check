@@ -70,14 +70,14 @@ class R1CSViewer {
         this.mode.value = state.signed ? 'signed' : 'raw';
         const hint = this.panel.querySelector('.r1cs-analysis-hint');
         if (hint) {
-            hint.textContent = '检测引擎：Picus · 正在检查环境…';
+            hint.textContent = 'Engine: Picus · Checking environment…';
             fetch('/r1cs/engine').then(response => response.json()).then(info => {
                 if (this.state !== state) return;
                 hint.textContent = info.ready
-                    ? '检测引擎：Picus · 点击 Analyze 检查输出唯一性，结果显示在下方。'
+                    ? 'Engine: Picus · Click Analyze to check output uniqueness. Results appear below.'
                     : info.reason;
             }).catch(() => {
-                if (this.state === state) hint.textContent = '无法查询 Picus 环境，请检查网页服务。';
+                if (this.state === state) hint.textContent = 'Could not check the Picus environment. Check the web service.';
             });
         }
         this.load(state.offset);
@@ -138,7 +138,17 @@ class R1CSViewer {
 }
 
 function renderR1CSReport(container, report) {
-    container.className = 'result r1cs-report';
+    const outcomes = {
+        safe: {style: 'success', level: 'Success', message: 'Output uniqueness verified.'},
+        unsafe: {style: 'warning', level: 'Warning', message: 'Picus found an underconstrained circuit.'},
+        unknown: {style: 'warning', level: 'Warning', message: 'Output uniqueness could not be determined.'},
+        error: {style: 'error', level: 'Error', message: 'Analysis did not complete.'},
+        cancelled: {style: 'info', level: 'Info', message: 'Analysis cancelled by the user.'},
+        not_applicable: {style: 'info', level: 'Info', message: 'No public outputs to check.'},
+    };
+    const verdict = Object.hasOwn(outcomes, report.verdict) ? report.verdict : 'error';
+    const outcome = outcomes[verdict];
+    container.className = `result ${outcome.style} r1cs-report`;
     container.replaceChildren();
     container.style.display = 'block';
     const element = (tag, text, className = '') => {
@@ -147,27 +157,31 @@ function renderR1CSReport(container, report) {
         node.className = className;
         return node;
     };
-    const titles = {safe: '输出唯一性已验证', unsafe: 'Picus 发现欠约束',
-        unknown: '无法确定', error: '分析未完成', cancelled: '本次分析已取消',
-        not_applicable: '没有可检查的输出'};
     const reasons = {
-        timeout: '达到整个任务的时间上限，未得出结论。',
-        solver_inconclusive: '求解器未能在查询预算内得出结论。',
-        no_outputs: '此文件没有公开输出，未执行输出唯一性检查。',
-        invalid_output: 'Picus 返回了无法识别或不完整的结果，请查看运行日志。',
-        process_error: 'Picus 或求解器运行失败，请查看日志。',
-        supervisor_error: 'Picus 运行进程异常结束，请查看日志。',
-        runtime_error: '无法完成 Picus 调用，请查看日志并检查安装。',
+        timeout: 'The task time limit was reached without a conclusion.',
+        solver_inconclusive: 'The solver could not reach a conclusion within its query budget.',
+        no_outputs: 'Output uniqueness was not checked because this file has no public outputs.',
+        invalid_output: 'Picus returned an invalid or incomplete response. See the run logs.',
+        process_error: 'Picus or the solver failed. See the run logs.',
+        supervisor_error: 'The Picus supervisor ended unexpectedly. See the run logs.',
+        runtime_error: 'Could not run Picus. Check the installation and run logs.',
     };
-    container.append(element('p', 'PICUS · R1CS ANALYSIS', 'report-eyebrow'));
-    container.append(element('h3', titles[report.verdict] || '分析未完成', `picus-verdict verdict-${report.verdict}`));
-    container.append(element('p', `${report.filename} · ${report.elapsed_seconds}s · cvc5`, 'report-meta'));
-    container.append(element('p',
-        '检测范围：全部输入（包括私有输入）相同时，公开输出是否唯一。' +
-        '这不代表业务逻辑正确，也不代表所有安全问题都已排除。', 'report-notice'));
-    if (reasons[report.reason]) container.append(element('p', reasons[report.reason]));
-    if (report.verdict === 'unsafe') {
-        container.append(element('h4', '反例 · 相同输入，不同输出'));
+    const logLine = (level, message) => `[${level}]`.padEnd(13) + message;
+    const lines = [
+        logLine('Info', `File: ${report.filename || 'Not provided'}`),
+        logLine('Info', `Engine: Picus | Solver: ${report.solver || 'cvc5'}`),
+        logLine('Info', 'Checking output uniqueness for identical public and private inputs.'),
+        logLine(outcome.level, outcome.message),
+    ];
+    if (Object.hasOwn(reasons, report.reason)) lines.push(logLine(outcome.level, reasons[report.reason]));
+    if (Number.isFinite(report.elapsed_seconds)) {
+        lines.push(logLine('Timeit', `Elapsed time: ${report.elapsed_seconds} s`));
+    }
+    lines.push('', '='.repeat(50), `Result: ${verdict}`);
+    container.append(element('h3', 'Analysis Result'));
+    container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
+    if (verdict === 'unsafe') {
+        container.append(element('h4', 'Counterexample: same inputs, different outputs'));
         const cex = report.counterexample;
         if (cex) {
             const table = (headers, rows, differs = () => false) => {
@@ -180,26 +194,30 @@ function renderR1CSReport(container, report) {
                 const body = element('tbody', '');
                 rows.forEach(values => {
                     const tr = element('tr', '', differs(values) ? 'picus-difference' : '');
-                    values.forEach(value => tr.append(element('td', value == null ? '未提供' : value)));
+                    values.forEach(value => tr.append(element('td', value == null ? 'Not provided' : value)));
                     body.append(tr);
                 });
                 node.append(head, body); wrap.append(node); container.append(wrap);
             };
-            if (cex.inputs.length) table(['输入变量', '两组共同的输入值'],
+            if (cex.inputs.length) table(['Input wire', 'Shared input value'],
                 cex.inputs.map(item => [`w${item.wire}`, item.value]));
-            else container.append(element('p', '反例未列出输入值。'));
-            table(['输出变量', '第一组输出', '第二组输出'],
+            else container.append(element('p', 'No input values were listed in the counterexample.'));
+            table(['Output wire', 'First output', 'Second output'],
                 cex.outputs.map(item => [`w${item.wire}`, item.first, item.second]),
                 values => values[1] != null && values[2] != null && values[1] !== values[2]);
-            if (cex.truncated) container.append(element('p', '反例较长，每组只展示前 500 个变量。'));
+            if (cex.truncated) container.append(element('p', 'Only the first 500 variables in each group are shown.'));
         } else {
-            container.append(element('p', 'Picus 已报告欠约束，但反例未能整理，请展开原始日志查看。'));
+            container.append(element('p', 'Picus reported underconstraint, but the counterexample could not be formatted. See the raw run logs.'));
         }
     }
     const details = element('details', '', 'picus-logs');
-    details.append(element('summary', '运行详情与日志'));
-    details.append(element('p', `引擎：Veridise/Picus · ${report.revision || ''}`, 'report-meta'));
-    details.append(element('pre', (report.logs || []).join('\n') || '没有运行日志。'));
-    if (report.logs_truncated) details.append(element('p', '仅保留最近 1000 条日志，每条最多显示 1000 个字符。'));
+    details.append(element('summary', 'Run details and raw logs'));
+    const runDetails = [logLine('Info', 'Engine: Veridise/Picus')];
+    if (report.revision) runDetails.push(logLine('Info', `Revision: ${report.revision}`));
+    if (report.exit_code != null) runDetails.push(logLine('Info', `Exit code: ${report.exit_code}`));
+    if (report.reason) runDetails.push(logLine('Info', `Reason: ${report.reason}`));
+    details.append(element('pre', runDetails.join('\n')));
+    details.append(element('pre', (report.logs || []).join('\n') || 'No run logs available.', 'picus-raw-log'));
+    if (report.logs_truncated) details.append(element('p', 'Only the latest 1,000 log entries are retained, with up to 1,000 characters per entry.'));
     container.append(details);
 }

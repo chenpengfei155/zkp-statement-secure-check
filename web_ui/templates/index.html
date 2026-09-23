@@ -206,20 +206,13 @@
         .error { background: #fff5f5; border-color: #feb2b2; color: #c53030; }
         .success { background: #f0fff4; border-color: #9ae6b4; color: #276749; }
         .warning { background: #fffaf0; border-color: #fbd38d; color: #c05621; }
-        .result.r1cs-report { background: #1c1f28; color: #e1e7f0; border-color: #343b4c; border-radius: 10px; }
-        .r1cs-report h3 { color: #eef2ff; margin-bottom: 6px; }
         .r1cs-report p { line-height: 1.7; margin: 8px 0; overflow-wrap: anywhere; }
-        .r1cs-report .report-meta { color: #a3adbf; font-size: 13px; }
-        .r1cs-report .report-notice { padding: 12px 16px; background: #292b40; border-left: 3px solid #a89bfa; border-radius: 4px; }
-        .r1cs-report .report-findings { display: grid; gap: 10px; margin: 16px 0; }
-        .r1cs-report .report-finding { padding: 12px 16px; background: #242833; border: 1px solid #343b4c; border-radius: 6px; }
-        .r1cs-report .report-error { border-left: 3px solid #fca5a5; }
-        .r1cs-report .report-warning { border-left: 3px solid #f5c876; }
-        .r1cs-report .report-evidence { color: #b5c1d8; font-family: Consolas, monospace; font-size: 13px; }
+        .r1cs-report h4 { margin: 18px 0 10px; }
         .r1cs-report .report-table-wrap { overflow-x: auto; }
         .r1cs-report table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        .r1cs-report th, .r1cs-report td { text-align: left; padding: 12px; border-bottom: 1px solid #343b4c; vertical-align: top; }
-        .r1cs-report th { color: #a3adbf; font-weight: 500; }
+        .r1cs-report th, .r1cs-report td { text-align: left; padding: 10px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+        .r1cs-report th { color: #4a5568; font-weight: 600; }
+        .r1cs-report td { font-family: 'Courier New', monospace; overflow-wrap: anywhere; }
         .r1cs-analysis-hint { color: #a3adbf; font-size: 13px; line-height: 1.6; margin: 12px 0; }
         .loading {
             display: none;
@@ -317,14 +310,9 @@
             white-space: pre-wrap;
         }
         [hidden] { display: none !important; }
-        .report-eyebrow { color: #b8a8ff; font-size: 11px; letter-spacing: .12em; }
-        .picus-verdict { font-size: 23px; margin: 10px 0; }
-        .r1cs-report .verdict-safe { color: #8de1b5; }
-        .r1cs-report .verdict-unsafe, .r1cs-report .verdict-error { color: #ffacae; }
-        .r1cs-report .verdict-unknown, .r1cs-report .verdict-cancelled, .r1cs-report .verdict-not_applicable { color: #e6ca89; }
-        .picus-difference { background: #3c2835; color: #ffd0d1; }
+        .picus-difference { background: #fff5f5; color: #9b2c2c; }
         .picus-logs { margin-top: 18px; }
-        .picus-logs summary { cursor: pointer; color: #b9c6df; }
+        .picus-logs summary { cursor: pointer; color: #4a5568; }
         .picus-logs pre { max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
         .picus-running { opacity: .7; }
         .workspace-container.r1cs-active { height: clamp(520px, calc(100vh - 245px), 860px); }
@@ -450,14 +438,14 @@
                                     original signal names and actual input values are unavailable.</p>
                             </div>
                         </details>
-                        <p class="r1cs-analysis-hint">检测引擎：Picus · Analyze 检查输出唯一性，结果显示在下方。</p>
+                        <p class="r1cs-analysis-hint">Engine: Picus · Click Analyze to check output uniqueness. Results appear below.</p>
                         <div class="r1cs-toolbar">
                             <div class="r1cs-section-title">Constraints <span class="r1cs-equation-form">A × B − C = 0</span></div>
                             <div class="r1cs-toolbar-actions">
                                 <label for="coefficientMode">Display</label>
                                 <select id="coefficientMode" data-action="coefficients">
-                                    <option value="signed">Signed / 简洁系数</option>
-                                    <option value="raw">Original / 原始系数</option>
+                                    <option value="signed">Signed coefficients</option>
+                                    <option value="raw">Original coefficients</option>
                                 </select>
                                 <div class="r1cs-pager">
                                     <button data-action="previous" aria-label="Previous page" title="Previous page" disabled>←</button>
@@ -873,7 +861,7 @@
             if (isR1CS) {
                 const started = Date.now();
                 sourceState.analysisStarted = started;
-                let stage = '正在检查 Picus 环境';
+                let stage = 'Checking Picus environment';
                 progressBar.classList.add('picus-running');
                 progressBar.style.width = '100%';
                 progressBar.textContent = 'Picus';

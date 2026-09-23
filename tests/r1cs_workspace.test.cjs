@@ -181,10 +181,10 @@ test('R1CS Analyze dispatches by id and preserves reports across tab switches wi
     assert.equal(h.run("openFiles['demo.r1cs'].result.type"), 'r1cs');
     h.run("switchToFile('demo.r1cs')");
     const result = h.document.getElementById('result');
-    assert.equal(result.className, 'result r1cs-report');
+    assert.equal(result.className, 'result success r1cs-report');
     assert.equal(result.querySelectorAll('.coverage-unavailable').length, 0);
-    assert.match(result.querySelector('.picus-verdict').textContent, /输出唯一性已验证/);
-    assert.match(result.querySelector('.report-notice').textContent, /不代表所有安全问题/);
+    assert.equal(result.querySelector('h3').textContent, 'Analysis Result');
+    assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Success\]\s+Output uniqueness verified/);
     assert.ok(stream.closed);
     assert.equal(h.run('analysisBusy'), false);
     assert.equal(h.editor.getValue(), 'edited source');
@@ -241,9 +241,11 @@ test('Picus counterexamples preserve decimal strings, highlight differences and 
     const result = h.document.getElementById('result');
     const values = result.querySelectorAll('td').map(node => node.textContent);
     assert.ok(values.includes(big));
-    assert.ok(values.includes('未提供'));
+    assert.ok(values.includes('Not provided'));
+    assert.equal(result.className, 'result warning r1cs-report');
+    assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Warning\]\s+Picus found an underconstrained circuit/);
     assert.equal(result.querySelectorAll('.picus-difference').length, 1);
-    assert.equal(result.querySelector('pre').textContent, '<script>bad()</script>');
+    assert.equal(result.querySelector('.picus-raw-log').textContent, '<script>bad()</script>');
     assert.equal(result.querySelectorAll('script').length, 0);
 });
 
