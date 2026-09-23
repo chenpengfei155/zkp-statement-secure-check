@@ -746,11 +746,38 @@
         }
         
         // Load example
-        document.getElementById('exampleSelect').addEventListener('change', function() {
+        let exampleSequence = 0;
+        document.getElementById('exampleSelect').addEventListener('change', async function() {
+            const selection = ++exampleSequence;
             const example = this.value;
             if (example && examples[example]) {
+                const entry = examples[example];
+                if (entry.kind === 'r1cs') {
+                    const name = entry.filename;
+                    const generation = workspaceGeneration;
+                    const sequence = ++uploadSequence;
+                    latestUploads.set(name, sequence);
+                    const isCurrent = () => generation === workspaceGeneration &&
+                        selection === exampleSequence && latestUploads.get(name) === sequence;
+                    showResult('info', `Opening ${name}…`);
+                    try {
+                        const response = await fetch(`/examples/r1cs/${encodeURIComponent(name)}`, {method: 'POST'});
+                        const data = await response.json();
+                        if (!isCurrent()) {
+                            releaseR1CS(data);
+                            return;
+                        }
+                        if (!response.ok) throw new Error(data.error || 'Could not open the example.');
+                        const file = {...data, name};
+                        fileTree[name] = {type: 'file', file, path: name};
+                        await openFile(name, file, true);
+                    } catch (error) {
+                        if (isCurrent()) showResult('error', error.message);
+                    }
+                    return;
+                }
                 const name = `${example}.circom`;
-                const file = {name, kind: 'circom', content: examples[example]};
+                const file = {name, kind: 'circom', content: entry};
                 fileTree[name] = {type: 'file', file, path: name};
                 openFile(name, file, true);
             }

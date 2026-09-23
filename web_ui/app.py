@@ -13,6 +13,7 @@ import queue
 import time
 from io import StringIO
 from pathlib import Path
+from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
 
 # Add src to path
@@ -141,11 +142,34 @@ component main = Multiplier();""",
 component main = UnusedSignal();"""
 }
 
+R1CS_EXAMPLES = {
+    'Unused Input (R1CS)': 'demo.r1cs',
+    '2-Bit XOR (R1CS)': 'demo1.r1cs',
+}
+
 
 @app.route('/')
 def index():
     """Render the main page."""
-    return render_template('index.html', examples=EXAMPLES)
+    examples = {**EXAMPLES, **{
+        label: {'kind': 'r1cs', 'filename': filename}
+        for label, filename in R1CS_EXAMPLES.items()
+    }}
+    return render_template('index.html', examples=examples)
+
+
+@app.route('/examples/r1cs/<filename>', methods=['POST'])
+def open_r1cs_example(filename):
+    """Give each opened example the same isolated lifecycle as an upload."""
+    if filename not in R1CS_EXAMPLES.values():
+        return jsonify({'error': 'Unknown R1CS example.'}), 404
+    try:
+        path = Path(__file__).resolve().parent.parent / filename
+        with path.open('rb') as stream:
+            return jsonify(r1cs_store.add(FileStorage(stream=stream, filename=filename)))
+    except (OSError, R1CSError):
+        app.logger.exception('Could not open R1CS example %s', filename)
+        return jsonify({'error': f'Could not open the bundled example {filename}.'}), 500
 
 
 @app.route('/analyze', methods=['POST'])
