@@ -2,13 +2,13 @@
 
 [English project guide](../README.md) | [简体中文项目说明](../README.zh-CN.md)
 
-A web interface for analyzing Circom source, viewing binary R1CS constraints and running limited constraint checks.
+A web interface for analyzing Circom source, viewing binary R1CS constraints and checking output uniqueness with Picus.
 
 ## Features
 
 - 📝 **Type Code**: Write or paste Circom code directly in the editor
 - 📚 **Examples**: Select from pre-loaded example circuits with common issues
-- 📁 **Upload**: Open `.circom` files for source analysis or `.r1cs` files for viewing and constraint checks
+- 📁 **Upload**: Open `.circom` files for source analysis or `.r1cs` files for viewing and Picus analysis
 - 🔢 **R1CS Viewer**: Metadata, 50 constraints per page, and signed/original coefficient display
 - ⚡ **Quick Analysis**: Instant security vulnerability detection
 
@@ -63,7 +63,7 @@ The web interface has no JSON download button. Use the
 ### R1CS Constraint Viewer and Analysis
 
 Use **Upload File** to open `demo1.r1cs`. The viewer opens automatically and offers
-**Analyze** for limited constraint checks. Its compact overview shows the file size, constraint/variable
+**Analyze** for Picus output-uniqueness checks. Its compact overview shows the file size, constraint/variable
 counts and public/private input and public output counts. Expand **Field modulus
 & reading guide** for the full modulus and explanation. The **← / →** buttons
 page through 50 equations at a time in the form `A × B − C = 0`.
@@ -84,36 +84,51 @@ It supports standard version 1 files, but not custom-gate extensions or `.sym`
 files. It does not restore source or generate proofs.
 Folder selection and the CLI remain Circom-only.
 
-Click **Analyze** to check retained wires absent from effective constraints,
-tautologies (`0 = 0`), impossible constant constraints and contradictions found
-by bounded linear elimination. The report appears below the workspace and stays
-with its file tab. Occurrence is checked after polynomial normalization modulo
-the file's modulus; mentioning a wire in `x × 0 = 0` does not constrain it.
-Unused non-output wires and tautologies are informational, not proof of a vulnerability.
+Click **Analyze** after the [one-time Picus installation](../README.md#install-picus-once-windows--wsl).
+The report displays `safe`, `unsafe`, or `unknown`, plus elapsed time and logs.
+Picus checks unique public outputs for identical public and private inputs;
+it does not prove business correctness or general satisfiability. No public
+outputs means `not_applicable`, not a passing result. Counterexamples show
+wire numbers and two alternative outputs, with decimal strings preserving precision.
 
-The report lists all nine original source check categories: unconstrained outputs
-and unused signals have partial coverage; the other seven explicitly say
-**unavailable / 无法检查**, because assignments, types, component boundaries and
-conditional computation are missing from R1CS. No findings does not establish
-safety. Output uniqueness, general nonlinear satisfiability and application logic
-are not checked. See the [full scope](../README.md#view-and-analyze-an-r1cs-file).
+### Picus configuration
 
-The analysis uses a 20-second cooperative time budget, at most 4,096 products
-per constraint / 1,000,000 overall, and linear elimination limited to 256 basis
-rows, 128 terms per row and 100,000 reduction operations. Exceeded limits produce
-a partial report. At most 200 findings are displayed; counts include the remainder.
-Only one R1CS analysis runs at a time; a second request receives HTTP 409.
-**Stop** requests cancellation. Closed uploads in use by a worker are deleted
-when that worker releases them; active analyses prevent expiry.
+Set these **server-side environment variables** before starting Flask:
 
-API: `POST /r1cs/<id>/analyze` returns a `session_id`. The existing
-`GET /progress/<session_id>` stream delivers progress and a structured R1CS report
-in its `complete` event. `POST /stop/<session_id>` cancels the analysis. Expired
-or closed uploads return HTTP 404. Circom `/analyze` retains its text report format.
+| Variable | Default |
+|---|---|
+| `CIRVERIFY_PICUS_DISTRO` | `Ubuntu-22.04` |
+| `CIRVERIFY_PICUS_HOME` | `~/.local/share/cirverify-picus` (Linux path) |
+| `CIRVERIFY_PICUS_TIMEOUT` | `120` seconds per task |
+| `CIRVERIFY_PICUS_QUERY_TIMEOUT_MS` | `5000` milliseconds per solver query |
+| `CIRVERIFY_PICUS_MEMORY_MIB` | `4096` per Linux child process |
+
+The fixed Picus revision is `138b151d3a388e5b6c040c163e0a1db04f2ceda6`;
+cvc5 is built at `de62429fa7c03a46d5d75f9d78fc8888792a0798` with CoCoA.
+The installer uses the official Racket 8.16 x86_64 distribution, with SHA-256
+verification. CoCoA's moved download URL is replaced by its current official
+archive URL, checked against the hash required by the pinned cvc5 source.
+The first installation needs network access and several GiB of disk space.
+The installer uses root only for Ubuntu packages; the tools live in the WSL
+user's directory. The backend uses argument arrays, a private temporary working
+directory, and a Linux process group. Stop, timeout, or loss of the supervisor's
+parent pipe kills/reaps the group; it never terminates the entire WSL distribution.
+No automatic fallback to the former finite R1CS checks is performed.
+
+API: `GET /r1cs/engine` returns readiness, pinned revision and a reason.
+`POST /r1cs/<id>/analyze` returns a `session_id`; it returns 503 when unavailable,
+422 for incompatible input counts, 404 for expired uploads and 409 when busy.
+`GET /progress/<session_id>` emits stage/elapsed-time updates and a `complete`
+event containing `kind`, `engine`, `revision`, `solver`, `scope`, `verdict`,
+`reason`, `exit_code`, `elapsed_seconds`, `logs`, and optional `counterexample`.
+Verdicts are `safe`, `unsafe`, `unknown`, `error`, `cancelled`, `not_applicable`.
+`POST /stop/<session_id>` requests cancellation; the lock is retained until
+cleanup finishes. Upload leases prevent expiry during analysis.
+Circom `/analyze` retains its existing text format and behavior.
 
 ## Known Limitations
 
-- **Stop** requests cancellation, but the background detection may continue
+- For **Circom**, **Stop** requests cancellation, but background detection may continue
   until its current computation finishes. Use `Ctrl+C` in the server terminal
   to stop the service.
 
@@ -129,4 +144,18 @@ project environment's Python. With Node.js available, run
 `node --test tests/r1cs_format.test.cjs tests/r1cs_workspace.test.cjs` for coefficient
 display, file-switching, analysis lifecycle and asynchronous response checks. Node.js is needed
 only for these JavaScript development tests, not to run the viewer.
+
+After installing Picus, test the actual WSL engine (no mocks):
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\check_picus.py
+$env:CIRVERIFY_TEST_PICUS = "1"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+The real-engine suite compares the demo's web result to the upstream command,
+checks both counterexample outputs against `out² = 1` in two fields, and tests
+zero constraints, reordered sections, Unicode paths, timeout, cancellation,
+parent-pipe closure, process reaping and temporary-directory cleanup. The
+installer also runs real `safe`/`unsafe` smoke tests before reporting success.
 

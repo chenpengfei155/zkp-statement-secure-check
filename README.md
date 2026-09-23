@@ -251,7 +251,7 @@ The main controls are:
 | Select Example | Load a built-in example into the editor |
 | Upload File | Open `.circom` source or a binary `.r1cs` file for viewing and analysis |
 | Select Folder | Load the folder's `.circom` files into the file list, then select one to open |
-| Analyze | Run source checks for the active `.circom` tab, or limited constraint checks for `.r1cs` |
+| Analyze | Run source checks for the active `.circom` tab, or Picus output-uniqueness checks for `.r1cs` |
 | Stop | Request cancellation; background detection may continue until the current computation finishes |
 | Clear | Close all file tabs, clear results, and release temporary R1CS uploads |
 
@@ -282,8 +282,8 @@ Circom source report, follow the [CLI examples](#example-usage) and use `--json`
 4. **Signed / 简洁系数** is the default: for example, `p−1` appears as `−1`.
    Select **Original / 原始系数** to display the original nonnegative coefficients.
    Both views describe the same arithmetic modulo the modulus stored in the file.
-5. Click **Analyze** and read the report below the workspace. It includes findings,
-   wire/constraint numbers, and coverage of the original nine source check categories.
+5. Install Picus once as described below, then click **Analyze** for the uniqueness
+   verdict, available counterexample and execution log.
    **Stop** cancels an active check; results stay with their file tab.
 
 For the project's `demo1.r1cs`, expect 6 constraints, 7 variables including the
@@ -291,29 +291,45 @@ constant, 2 public outputs, 0 public inputs and 4 private inputs. Switching file
 tabs preserves source edits and the R1CS page/coefficient mode. Uploading the same
 filename again replaces that tab's content.
 
-R1CS analysis performs **limited constraint checks**: outputs and retained wires
-absent from effective constraints, constraints equivalent to `0 = 0`, impossible
-constant constraints, and contradictions found by bounded linear elimination.
-Coefficients are normalized modulo the file's modulus before checking occurrence;
-`x × 0 = 0`, for example, does not constrain `x`. Unused non-output wires and
-tautologies are informational, not automatically security vulnerabilities.
+#### Install Picus once (Windows + WSL)
 
-Of the original nine check categories, unconstrained outputs and unused signals
-have **partial coverage**. The remaining seven display **unavailable / 无法检查**:
-component input/output checks, data-flow/constraint discrepancies, type mismatch,
-assignment misuse, unsafe division, and nondeterministic data flow require source
-information that R1CS does not retain. These are not reported as passing.
-No findings does **not** prove safety: output uniqueness, general nonlinear
-satisfiability and application logic are not verified. For example, `x² = 1` can
-have multiple solutions even though `x` occurs in a constraint.
+The viewer needs no additional software. **Analyze** uses the original
+[Veridise/Picus](https://github.com/Veridise/Picus) at commit
+`138b151d3a388e5b6c040c163e0a1db04f2ceda6`, with Racket and cvc5 finite fields,
+in WSL's `Ubuntu-22.04`. From PowerShell at the project root:
 
-Analysis has a 20-second cooperative time budget, bounded polynomial expansion
-and linear elimination, and displays at most 200 findings (counts include all
-findings). Reaching a limit produces an explicitly partial report. One R1CS
-analysis runs at a time. No solver, Node.js or new runtime dependency is needed.
-It does not recover Circom source, accept `.sym` files, or generate proofs.
-Custom-gate extensions are currently unsupported. Folder selection and the CLI
-continue to support Circom source only.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_picus.ps1
+```
+
+The first installation downloads and builds dependencies and can take a while.
+The installation belongs to the WSL user at `~/.local/share/cirverify-picus`.
+Restart the web service after setup. Uploading/analyzing never downloads software.
+For another distribution, pass `-Distro` and set `CIRVERIFY_PICUS_DISTRO` before
+starting the web server.
+The installer uses a private Racket 8.16 runtime and runs real safe/unsafe smoke
+tests. Recheck offline with `.\.venv\Scripts\python.exe .\scripts\check_picus.py`.
+
+Picus checks **unique public outputs for the same public AND private inputs**
+(default weak safety, not `--strong`). `safe` means this property was verified;
+it does not establish business correctness, satisfiability or general security.
+`unsafe` reports underconstraint, with available counterexamples. `unknown`
+means inconclusive, never passing. Errors and cancellation are shown separately.
+Files with no public outputs are reported as not applicable.
+For example, an output fixed to zero is unique, but may not implement the XOR
+operation you intended; functional correctness needs a separate specification.
+
+No source, `.sym`, or actual input values are required. Wires use `w<number>`;
+large counterexample values remain decimal strings. Compilation with `--O0`
+is recommended; incompatible optimized input counts require recompilation.
+Custom gates are unsupported. Source recovery, proof generation, CLI and folder
+R1CS analysis are outside this feature.
+
+Defaults: 5 seconds per solver query, 120 seconds per task, 4 GiB address-space
+limit per Linux child process, and one R1CS task at a time. **Stop**, closing or
+replacing a file, and **Clear** cancel its process group. An unavailable Picus
+installation does not affect Circom analysis or R1CS viewing.
+See [configuration and tests](web_ui/README.md#picus-configuration).
 
 The total upload request limit is **100 MiB**, including form data. R1CS uploads
 are temporary: closing a file tab or clicking **Clear** releases them after any

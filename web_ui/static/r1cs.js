@@ -68,6 +68,18 @@ class R1CSViewer {
             summary.append(stat);
         }
         this.mode.value = state.signed ? 'signed' : 'raw';
+        const hint = this.panel.querySelector('.r1cs-analysis-hint');
+        if (hint) {
+            hint.textContent = '检测引擎：Picus · 正在检查环境…';
+            fetch('/r1cs/engine').then(response => response.json()).then(info => {
+                if (this.state !== state) return;
+                hint.textContent = info.ready
+                    ? '检测引擎：Picus · 点击 Analyze 检查输出唯一性，结果显示在下方。'
+                    : info.reason;
+            }).catch(() => {
+                if (this.state === state) hint.textContent = '无法查询 Picus 环境，请检查网页服务。';
+            });
+        }
         this.load(state.offset);
     }
 
@@ -135,71 +147,59 @@ function renderR1CSReport(container, report) {
         node.className = className;
         return node;
     };
-    container.append(element('h3', 'R1CS Analysis · 约束检查结果'));
-    container.append(element('p', `${report.filename} · 已扫描 ${report.stats.constraints_scanned} / ${report.stats.constraints_total} 条约束 · ${report.elapsed_seconds}s`, 'report-meta'));
-    const headline = report.status === 'partial' ? '部分检查未完成' : '可用检查已完成';
-    container.append(element('p', `${headline} · ${report.counts.error} 项错误 · ${report.counts.warning} 项警告 · ${report.counts.info} 项提示`));
-    container.append(element('p',
-        '检测范围：未参与有效约束的输出和变量、恒成立的约束，以及常量或有界线性推导可确认的矛盾。' +
-        '原有 9 类检测中，2 类仅能部分检查，7 类因缺少源码信息无法检查。未发现问题不代表电路安全；' +
-        '本次未验证输出唯一性、全部非线性约束的可满足性或业务逻辑。', 'report-notice'));
-    if (report.incomplete_reasons.length) {
-        container.append(element('p', '达到计算预算或时间限制，以下范围未全部检查：'));
-        const reasons = element('ul', '');
-        for (const reason of report.incomplete_reasons) reasons.append(element('li', reason));
-        container.append(reasons);
-    }
-    const titles = {
-        unconstrained_output: '输出未参与有效约束', unused_wire: '变量未参与有效约束',
-        ineffective_constraint: '无效约束：等价于 0 = 0',
-        impossible_constraint: '约束矛盾：该约束无法满足',
-        contradictory_linear_constraints: '线性约束矛盾：这些约束无法同时满足',
-    };
-    const severity = {error: '错误', warning: '警告', info: '提示'};
-    const findings = element('div', '', 'report-findings');
-    for (const finding of report.findings) {
-        const card = element('div', '', `report-finding report-${finding.severity}`);
-        card.append(element('strong', `${severity[finding.severity]} · ${titles[finding.code] || finding.code}`));
-        card.append(element('p', finding.message));
-        const evidence = [
-            finding.wires.length ? `变量：${finding.wires.map(wire => 'w' + wire).join(', ')}` : '',
-            finding.constraints.length ? `约束：${finding.constraints.map(index => '#' + (index + 1)).join(', ')}` : '',
-        ].filter(Boolean).join(' · ');
-        if (evidence) card.append(element('p', evidence + (finding.evidence_truncated
-            ? ` …（共 ${finding.affected_count} 项，仅展示部分编号）` : ''), 'report-evidence'));
-        findings.append(card);
-    }
-    if (!report.findings.length) findings.append(element('p', '本次可用检查未发现问题。请结合下方的检测覆盖范围解读此结果。'));
-    if (report.findings_truncated) findings.append(element('p', '结果较多，仅显示前 200 条记录；上方计数包含其余记录。'));
-    container.append(findings);
-    container.append(element('h3', '原有检测项的覆盖范围'));
+    const titles = {safe: '输出唯一性已验证', unsafe: 'Picus 发现欠约束',
+        unknown: '无法确定', error: '分析未完成', cancelled: '本次分析已取消',
+        not_applicable: '没有可检查的输出'};
     const reasons = {
-        unconstrained_output: '仅检查公开输出是否完全缺少有效约束；无法据此确认输出唯一。',
-        unconstrained_component_input: 'R1CS 不保留组件边界和组件输入声明。',
-        data_flow_constraint_discrepancy: 'R1CS 不保留原来的计算过程，无法与约束比较。',
-        unused_component_output: 'R1CS 不保留组件边界及源码中的使用关系。',
-        type_mismatch: 'R1CS 不保留源码中的类型和模板信息。',
-        assignment_misuse: 'R1CS 不记录原来使用了 <-- 还是 <== 等赋值语句。',
-        unused_signal: '仅检查保留下来的变量是否参与有效约束；无法还原被优化掉的信号声明。',
-        divide_by_zero: 'R1CS 不保留原来的除法语句及计算过程。',
-        nondeterministic_data_flow: 'R1CS 不保留原来的条件计算过程；本次也不检查输出唯一性。',
+        timeout: '达到整个任务的时间上限，未得出结论。',
+        solver_inconclusive: '求解器未能在查询预算内得出结论。',
+        no_outputs: '此文件没有公开输出，未执行输出唯一性检查。',
+        invalid_output: 'Picus 返回了无法识别或不完整的结果，请查看运行日志。',
+        process_error: 'Picus 或求解器运行失败，请查看日志。',
+        supervisor_error: 'Picus 运行进程异常结束，请查看日志。',
+        runtime_error: '无法完成 Picus 调用，请查看日志并检查安装。',
     };
-    const wrap = element('div', '', 'report-table-wrap');
-    const table = element('table', '');
-    const head = element('thead', '');
-    const header = element('tr', '');
-    for (const label of ['检测项', '支持范围', '说明']) header.append(element('th', label));
-    head.append(header);
-    const body = element('tbody', '');
-    for (const check of report.coverage) {
-        const row = element('tr', '');
-        row.append(element('td', check.name));
-        row.append(element('td', check.status === 'unavailable' ? '无法检查' : '部分检查',
-            `coverage-status coverage-${check.status}`));
-        row.append(element('td', reasons[check.code] || check.reason));
-        body.append(row);
+    container.append(element('p', 'PICUS · R1CS ANALYSIS', 'report-eyebrow'));
+    container.append(element('h3', titles[report.verdict] || '分析未完成', `picus-verdict verdict-${report.verdict}`));
+    container.append(element('p', `${report.filename} · ${report.elapsed_seconds}s · cvc5`, 'report-meta'));
+    container.append(element('p',
+        '检测范围：全部输入（包括私有输入）相同时，公开输出是否唯一。' +
+        '这不代表业务逻辑正确，也不代表所有安全问题都已排除。', 'report-notice'));
+    if (reasons[report.reason]) container.append(element('p', reasons[report.reason]));
+    if (report.verdict === 'unsafe') {
+        container.append(element('h4', '反例 · 相同输入，不同输出'));
+        const cex = report.counterexample;
+        if (cex) {
+            const table = (headers, rows, differs = () => false) => {
+                const wrap = element('div', '', 'report-table-wrap');
+                const node = element('table', '');
+                const head = element('thead', '');
+                const row = element('tr', '');
+                headers.forEach(value => row.append(element('th', value)));
+                head.append(row);
+                const body = element('tbody', '');
+                rows.forEach(values => {
+                    const tr = element('tr', '', differs(values) ? 'picus-difference' : '');
+                    values.forEach(value => tr.append(element('td', value == null ? '未提供' : value)));
+                    body.append(tr);
+                });
+                node.append(head, body); wrap.append(node); container.append(wrap);
+            };
+            if (cex.inputs.length) table(['输入变量', '两组共同的输入值'],
+                cex.inputs.map(item => [`w${item.wire}`, item.value]));
+            else container.append(element('p', '反例未列出输入值。'));
+            table(['输出变量', '第一组输出', '第二组输出'],
+                cex.outputs.map(item => [`w${item.wire}`, item.first, item.second]),
+                values => values[1] != null && values[2] != null && values[1] !== values[2]);
+            if (cex.truncated) container.append(element('p', '反例较长，每组只展示前 500 个变量。'));
+        } else {
+            container.append(element('p', 'Picus 已报告欠约束，但反例未能整理，请展开原始日志查看。'));
+        }
     }
-    table.append(head, body);
-    wrap.append(table);
-    container.append(wrap);
+    const details = element('details', '', 'picus-logs');
+    details.append(element('summary', '运行详情与日志'));
+    details.append(element('p', `引擎：Veridise/Picus · ${report.revision || ''}`, 'report-meta'));
+    details.append(element('pre', (report.logs || []).join('\n') || '没有运行日志。'));
+    if (report.logs_truncated) details.append(element('p', '仅保留最近 1000 条日志，每条最多显示 1000 个字符。'));
+    container.append(details);
 }

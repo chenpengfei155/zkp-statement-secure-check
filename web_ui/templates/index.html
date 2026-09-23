@@ -220,8 +220,6 @@
         .r1cs-report table { width: 100%; border-collapse: collapse; font-size: 14px; }
         .r1cs-report th, .r1cs-report td { text-align: left; padding: 12px; border-bottom: 1px solid #343b4c; vertical-align: top; }
         .r1cs-report th { color: #a3adbf; font-weight: 500; }
-        .r1cs-report .coverage-status { white-space: nowrap; color: #f5c876; }
-        .r1cs-report .coverage-unavailable { color: #a3adbf; }
         .r1cs-analysis-hint { color: #a3adbf; font-size: 13px; line-height: 1.6; margin: 12px 0; }
         .loading {
             display: none;
@@ -319,6 +317,16 @@
             white-space: pre-wrap;
         }
         [hidden] { display: none !important; }
+        .report-eyebrow { color: #b8a8ff; font-size: 11px; letter-spacing: .12em; }
+        .picus-verdict { font-size: 23px; margin: 10px 0; }
+        .r1cs-report .verdict-safe { color: #8de1b5; }
+        .r1cs-report .verdict-unsafe, .r1cs-report .verdict-error { color: #ffacae; }
+        .r1cs-report .verdict-unknown, .r1cs-report .verdict-cancelled, .r1cs-report .verdict-not_applicable { color: #e6ca89; }
+        .picus-difference { background: #3c2835; color: #ffd0d1; }
+        .picus-logs { margin-top: 18px; }
+        .picus-logs summary { cursor: pointer; color: #b9c6df; }
+        .picus-logs pre { max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+        .picus-running { opacity: .7; }
         .workspace-container.r1cs-active { height: clamp(520px, calc(100vh - 245px), 860px); }
         .r1cs-panel {
             --r1cs-muted: #a3adbf;
@@ -442,7 +450,7 @@
                                     original signal names and actual input values are unavailable.</p>
                             </div>
                         </details>
-                        <p class="r1cs-analysis-hint">Analyze 可检查约束中的部分问题；需要源码的检测项会标为“无法检查”。结果显示在下方。</p>
+                        <p class="r1cs-analysis-hint">检测引擎：Picus · Analyze 检查输出唯一性，结果显示在下方。</p>
                         <div class="r1cs-toolbar">
                             <div class="r1cs-section-title">Constraints <span class="r1cs-equation-form">A × B − C = 0</span></div>
                             <div class="r1cs-toolbar-actions">
@@ -517,6 +525,7 @@
 
         function releaseR1CS(state) {
             if (state && state.kind === 'r1cs') {
+                if (analysisBusy && currentAnalysisState === state) stopAnalysis();
                 fetch(`/r1cs/${state.id}`, {method: 'DELETE', keepalive: true}).catch(() => {});
             }
         }
@@ -818,6 +827,8 @@
         let currentSessionId = null;
         let analysisGeneration = 0;
         let analysisBusy = false;
+        let currentAnalysisState = null;
+        let analysisTimer = null;
         
         // Analyze
         async function analyze() {
@@ -850,13 +861,27 @@
             
             btn.disabled = true;
             analysisBusy = true;
+            currentAnalysisState = sourceState;
+            if (sourceState) sourceState.result = null;
             stopBtn.style.display = 'inline-block';
             loading.style.display = 'block';
             result.style.display = 'none';
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
             progressBar.textContent = '0%';
-            progressText.textContent = isR1CS ? 'Checking R1CS constraints…' : 'Starting analysis...';
+            progressText.textContent = isR1CS ? 'Checking Picus environment…' : 'Starting analysis...';
+            if (isR1CS) {
+                const started = Date.now();
+                sourceState.analysisStarted = started;
+                let stage = '正在检查 Picus 环境';
+                progressBar.classList.add('picus-running');
+                progressBar.style.width = '100%';
+                progressBar.textContent = 'Picus';
+                analysisTimer = setInterval(() => {
+                    progressText.textContent = `${stage} · ${Math.floor((Date.now() - started) / 1000)}s`;
+                }, 500);
+                sourceState.setAnalysisStage = value => { stage = value; };
+            }
             progressLog.innerHTML = '';
             
             try {
@@ -889,6 +914,11 @@
                     
                     if (message.type === 'progress') {
                         const progressData = message.data;
+                        if (isR1CS) {
+                            if (sourceState.setAnalysisStage) sourceState.setAnalysisStage(progressData.message);
+                            progressText.textContent = `${progressData.message} · ${progressData.elapsed_seconds}s`;
+                            return;
+                        }
                         
                         // Update progress bar
                         if (progressData.percent !== undefined) {
@@ -908,8 +938,10 @@
                             progressLog.scrollTop = progressLog.scrollHeight;
                         }
                     } else if (message.type === 'complete') {
-                        progressBar.style.width = '100%';
-                        progressBar.textContent = '100%';
+                        if (!isR1CS) {
+                            progressBar.style.width = '100%';
+                            progressBar.textContent = '100%';
+                        }
                         progressText.textContent = 'Analysis completed!';
                         cleanupAnalysis();
                         if (isR1CS) publish('r1cs', {...message.result, filename: sourceState.metadata.filename});
@@ -944,6 +976,13 @@
         // Stop analysis
         async function stopAnalysis() {
             const sessionId = currentSessionId;
+            const state = currentAnalysisState;
+            if (state && state.kind === 'r1cs') {
+                const message = {filename: state.metadata.filename, verdict: 'cancelled',
+                    reason: 'cancelled', elapsed_seconds: Math.max(0, Math.round((Date.now() - state.analysisStarted) / 100) / 10), logs: []};
+                state.result = {type: 'r1cs', message};
+                if (openFiles[activeFile] === state) showResult('r1cs', message);
+            }
             analysisGeneration++;
             cleanupAnalysis();
             if (sessionId) {
@@ -957,6 +996,14 @@
         
         // Cleanup analysis state
         function cleanupAnalysis() {
+            if (analysisTimer !== null) clearInterval(analysisTimer);
+            analysisTimer = null;
+            if (currentAnalysisState) {
+                delete currentAnalysisState.setAnalysisStage;
+                delete currentAnalysisState.analysisStarted;
+            }
+            currentAnalysisState = null;
+            document.getElementById('progressBar').classList.remove('picus-running');
             analysisBusy = false;
             if (currentEventSource) {
                 currentEventSource.close();

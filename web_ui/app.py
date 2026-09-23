@@ -20,11 +20,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from cirverify.core import detect, print_reports
 from cirverify.r1cs import R1CSError
-from cirverify.r1cs_analysis import analyze_r1cs, AnalysisCancelled
 if __package__:
     from .r1cs_store import R1CSStore
+    from .picus import PicusEngine, empty_report
 else:
+    sys.path.insert(0, str(Path(__file__).parent.parent))
     from r1cs_store import R1CSStore
+    from web_ui.picus import PicusEngine, empty_report
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size for folder uploads
@@ -37,6 +39,8 @@ analysis_finished = {}
 analysis_lock = threading.Lock()
 r1cs_analysis_lock = threading.Lock()
 r1cs_store = R1CSStore()
+picus_engine = PicusEngine()
+r1cs_sessions = {}
 maintenance_lock = threading.Lock()
 maintenance_started = False
 
@@ -243,10 +247,12 @@ def analyze():
 @app.route('/stop/<session_id>', methods=['POST'])
 def stop_analysis(session_id):
     """Stop a running analysis."""
-    if session_id in stop_flags:
-        stop_flags[session_id].set()
-        if session_id in progress_queues:
-            progress_queues[session_id].put(('cancelled', 'Analysis cancelled by user'))
+    flag = stop_flags.get(session_id)
+    if flag:
+        flag.set()
+        messages = progress_queues.get(session_id)
+        if messages is not None and session_id not in r1cs_sessions:
+            messages.put(('cancelled', 'Analysis cancelled by user'))
         return jsonify({'success': True, 'message': 'Analysis stop requested'})
     return jsonify({'success': False, 'message': 'Session not found'}), 404
 
@@ -288,6 +294,10 @@ def progress_stream(session_id):
                 elif msg_type == 'progress':
                     yield f"data: {json.dumps({'type': 'progress', 'data': content})}\n\n"
         finally:
+            if not terminal_consumed and session_id in r1cs_sessions:
+                flag = stop_flags.get(session_id)
+                if flag:
+                    flag.set()
             if terminal_consumed:
                 progress_queues.pop(session_id, None)
                 analysis_finished.pop(session_id, None)
@@ -375,13 +385,23 @@ def r1cs_constraints(file_id):
 
 @app.route('/r1cs/<file_id>', methods=['DELETE'])
 def delete_r1cs(file_id):
-    r1cs_store.delete(file_id)
+    with r1cs_store.lock:
+        for session_id, owned_id in list(r1cs_sessions.items()):
+            flag = stop_flags.get(session_id)
+            if owned_id == file_id and flag:
+                flag.set()
+        r1cs_store.delete(file_id)
     return jsonify({'success': True})
+
+
+@app.route('/r1cs/engine')
+def r1cs_engine_status():
+    return jsonify(picus_engine.status())
 
 
 @app.route('/r1cs/<file_id>/analyze', methods=['POST'])
 def analyze_r1cs_upload(file_id):
-    """Run bounded constraint checks; never pass compiled bytes to the source detector."""
+    """Run Picus on a leased binary; source analysis remains a separate path."""
     import uuid
     # One R1CS worker at a time bounds memory/CPU across browser tabs and clients.
     if not r1cs_analysis_lock.acquire(blocking=False):
@@ -395,37 +415,62 @@ def analyze_r1cs_upload(file_id):
     except Exception:
         r1cs_analysis_lock.release()
         raise
+    metadata = reader.metadata
+    if 1 + metadata['public_outputs'] + metadata['public_inputs'] + metadata['private_inputs'] > metadata['wires']:
+        store.release(file_id)
+        r1cs_analysis_lock.release()
+        return jsonify({'error': 'Picus cannot map this file’s inputs to wires. Recompile with --O0 and upload again.'}), 422
+    if metadata['public_outputs']:
+        try:
+            engine_status = picus_engine.status()
+        except Exception:
+            store.release(file_id)
+            r1cs_analysis_lock.release()
+            raise
+        if not engine_status['ready']:
+            store.release(file_id)
+            r1cs_analysis_lock.release()
+            return jsonify({'error': engine_status['reason']}), 503
     session_id = str(uuid.uuid4())
     messages = queue.Queue()
     cancelled = threading.Event()
-    progress_queues[session_id] = messages
-    stop_flags[session_id] = cancelled
+    with store.lock:
+        # A tab may close while the environment check is still running.
+        if file_id not in store.entries:
+            store.release(file_id)
+            r1cs_analysis_lock.release()
+            return jsonify({'error': 'This R1CS file was closed. Please upload it again.'}), 404
+        progress_queues[session_id] = messages
+        stop_flags[session_id] = cancelled
+        r1cs_sessions[session_id] = file_id
 
     def run():
+        report = None
         try:
-            def progress(done, total):
-                messages.put(('progress', {'current': done, 'total': total,
-                                          'percent': round(100 * done / total) if total else 100,
-                                          'message': 'Checking compiled constraints'}))
-            report = analyze_r1cs(reader, cancelled=cancelled.is_set, progress=progress)
-            if cancelled.is_set():
-                raise AnalysisCancelled()
-            messages.put(('complete', report))
-        except AnalysisCancelled:
-            messages.put(('cancelled', 'Analysis cancelled by user'))
-        except Exception:
+            if not metadata['public_outputs']:
+                report = empty_report('not_applicable', 'no_outputs')
+            else:
+                report = picus_engine.analyze(reader, cancelled=cancelled.is_set,
+                                              progress=lambda data: messages.put(('progress', data)))
+        except Exception as error:
             app.logger.exception('R1CS analysis failed')
-            messages.put(('error', 'Could not analyze this R1CS file. Please upload it again.'))
+            report = empty_report('error', 'runtime_error')
+            report['logs'] = [str(error)]
         finally:
             try:
                 store.release(file_id)
             finally:
                 r1cs_analysis_lock.release()
+                if cancelled.is_set():
+                    report = report or empty_report('cancelled', 'cancelled')
+                    report['verdict'], report['reason'] = 'cancelled', 'cancelled'
+                messages.put(('complete', report))
                 if session_id in progress_queues:
                     analysis_finished[session_id] = time.monotonic()
                 messages.put(('done', None))
                 stop_flags.pop(session_id, None)
                 analysis_threads.pop(session_id, None)
+                r1cs_sessions.pop(session_id, None)
 
     thread = threading.Thread(target=run, daemon=True)
     analysis_threads[session_id] = thread
@@ -437,6 +482,7 @@ def analyze_r1cs_upload(file_id):
         progress_queues.pop(session_id, None)
         stop_flags.pop(session_id, None)
         analysis_threads.pop(session_id, None)
+        r1cs_sessions.pop(session_id, None)
         raise
     return jsonify({'session_id': session_id})
 

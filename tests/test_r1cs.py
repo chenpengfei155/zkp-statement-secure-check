@@ -190,6 +190,18 @@ class WebTests(unittest.TestCase):
         self.assertIn('Analysis failed', response.get_data(as_text=True))
         self.assertNotIn(session_id, web.progress_queues)
 
+    def test_folder_analysis_keeps_source_results(self):
+        before = set((ROOT / 'benchmarks').glob('cirverify_folder_*'))
+        with patch.object(web.picus_engine, 'analyze') as picus:
+            response = self.client.post('/analyze_folder', data={
+                'file_0': (BytesIO((ROOT / 'demo1.circom').read_bytes()), 'demo1.circom'),
+                'path_0': 'folder/demo1.circom'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['success_count'], 1)
+        self.assertIn('Total warnings: 0', response.json['results'][0]['result'])
+        picus.assert_not_called()
+        self.assertEqual(set((ROOT / 'benchmarks').glob('cirverify_folder_*')), before)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -65,6 +65,7 @@ function harness() {
     const streams = [];
     const context = vm.createContext({document, CodeMirror: {fromTextArea: () => editor},
         File: class File {}, AbortController, console,
+        setInterval: () => 1, clearInterval() {},
         EventSource: class {
             constructor(url) { this.url = url; streams.push(this); }
             close() { this.closed = true; }
@@ -151,16 +152,9 @@ test('expiry messages remain visible and leave paging disabled', async () => {
 });
 
 function reportFixture() {
-    return {kind: 'r1cs', status: 'completed', elapsed_seconds: 0.01,
-        stats: {constraints_scanned: 6, constraints_total: 6},
-        counts: {error: 0, warning: 0, info: 0}, incomplete_reasons: [], findings: [],
-        coverage: [
-            {code: 'unconstrained_output', name: 'Output', status: 'limited'},
-            {code: 'unused_signal', name: 'Signal', status: 'limited'},
-            ...['unconstrained_component_input', 'data_flow_constraint_discrepancy',
-                'unused_component_output', 'type_mismatch', 'assignment_misuse', 'divide_by_zero',
-                'nondeterministic_data_flow'].map(code => ({code, name: code, status: 'unavailable'})),
-        ]};
+    return {kind: 'r1cs', engine: 'picus', verdict: 'safe', reason: 'completed',
+        elapsed_seconds: 0.01, revision: '138b151', logs: ['The circuit is properly constrained'],
+        counterexample: null};
 }
 
 async function startAnalysis(h) {
@@ -178,8 +172,9 @@ test('R1CS Analyze dispatches by id and preserves reports across tab switches wi
     assert.equal(request.url, '/r1cs/file-a/analyze');
     assert.deepEqual(JSON.parse(request.options.body), {});
     const stream = h.streams.at(-1);
-    stream.emit({type: 'progress', data: {percent: 50, current: 3, total: 6}});
-    assert.equal(h.document.getElementById('progressBar').textContent, '50%');
+    stream.emit({type: 'progress', data: {message: 'Solving', elapsed_seconds: 3}});
+    assert.equal(h.document.getElementById('progressBar').textContent, 'Picus');
+    assert.match(h.document.getElementById('progressText').textContent, /Solving.*3s/);
     await h.open('source.circom', {kind: 'circom', content: 'edited source'});
     stream.emit({type: 'complete', result: reportFixture()});
     assert.equal(h.document.getElementById('result').style.display, 'none');
@@ -187,9 +182,9 @@ test('R1CS Analyze dispatches by id and preserves reports across tab switches wi
     h.run("switchToFile('demo.r1cs')");
     const result = h.document.getElementById('result');
     assert.equal(result.className, 'result r1cs-report');
-    assert.equal(result.querySelectorAll('.coverage-unavailable').length, 7);
-    assert.equal(result.querySelectorAll('.coverage-limited').length, 2);
-    assert.match(result.querySelector('.report-notice').textContent, /未发现问题不代表电路安全/);
+    assert.equal(result.querySelectorAll('.coverage-unavailable').length, 0);
+    assert.match(result.querySelector('.picus-verdict').textContent, /输出唯一性已验证/);
+    assert.match(result.querySelector('.report-notice').textContent, /不代表所有安全问题/);
     assert.ok(stream.closed);
     assert.equal(h.run('analysisBusy'), false);
     assert.equal(h.editor.getValue(), 'edited source');
@@ -234,4 +229,33 @@ test('Circom Analyze still sends edited source and displays its text report', as
     assert.deepEqual(JSON.parse(request.options.body), {code: 'edited'});
     h.streams.at(-1).emit({type: 'complete', result: 'Total warnings: 2'});
     assert.match(h.document.getElementById('result').innerHTML, /Total warnings: 2/);
+});
+
+test('Picus counterexamples preserve decimal strings, highlight differences and never fill missing values', async () => {
+    const h = harness();
+    const big = '21888242871839275222246405745257275088548364400416034343698204186575808495616';
+    h.context.picusFixture = {...reportFixture(), verdict: 'unsafe', logs: ['<script>bad()</script>'],
+        counterexample: {inputs: [{wire: 3, value: big}],
+            outputs: [{wire: 1, first: '1', second: big}, {wire: 2, first: '2', second: null}]}};
+    h.run("renderR1CSReport(document.getElementById('result'), picusFixture)");
+    const result = h.document.getElementById('result');
+    const values = result.querySelectorAll('td').map(node => node.textContent);
+    assert.ok(values.includes(big));
+    assert.ok(values.includes('未提供'));
+    assert.equal(result.querySelectorAll('.picus-difference').length, 1);
+    assert.equal(result.querySelector('pre').textContent, '<script>bad()</script>');
+    assert.equal(result.querySelectorAll('script').length, 0);
+});
+
+test('closing an R1CS tab before the start response cancels its late session', async () => {
+    const h = harness();
+    await h.open('demo.r1cs', h.r1cs());
+    const pending = h.run('analyze()');
+    const request = h.requests.at(-1);
+    h.run('clearAll()');
+    request.resolve({ok: true, json: async () => ({session_id: 'late-session'})});
+    await pending;
+    assert.ok(h.requests.some(r => r.url === '/stop/late-session'));
+    assert.equal(h.streams.length, 0);
+    assert.equal(h.run('analysisBusy'), false);
 });
