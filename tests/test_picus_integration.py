@@ -69,6 +69,8 @@ class RealPicusTests(unittest.TestCase):
             events = [json.loads(line[6:]) for line in stream.splitlines() if line.startswith('data: ')]
             report = next(event['result'] for event in events if event['type'] == 'complete')
             self.assertEqual(report['verdict'], 'safe', report)
+            self.assertEqual(len(report['checks']), 6)
+            self.assertTrue(all(check['status'] == 'pass' for check in report['checks']), report)
             client.delete('/r1cs/' + upload['id'])
         # Run the unmodified upstream entry point independently of our supervisor.
         reader = self.file(data)
@@ -99,6 +101,73 @@ class RealPicusTests(unittest.TestCase):
         self.assertEqual(report['verdict'], 'safe', report)
         report = self.analyze(self.file(r1cs(prime=17)))
         self.assertEqual(report['verdict'], 'unsafe', report)
+
+    def test_internal_ambiguity_with_unique_output_and_valid_counterexample(self):
+        # out = input, t^2 = 1. Inputs are fixed, output is unique, t is not.
+        rows = [({1: 1}, {0: 1}, {2: 1}), ({3: 1}, {3: 1}, {0: 1})]
+        report = self.analyze(self.file(r1cs(rows, prime=17, wires=4, private=1)))
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'warning', report)
+        self.assertEqual(checks['output_uniqueness']['status'], 'pass')
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        self.assertEqual(checks['signal_uniqueness']['status'], 'warning')
+        cex = checks['signal_uniqueness']['counterexample']
+        self.assertIsNotNone(cex, report)
+        internal = next(row for row in cex['internal'] if row['wire'] == 3)
+        self.assertNotEqual(internal['first'], internal['second'])
+        self.assertTrue(all(int(internal[k]) ** 2 % 17 == 1 for k in ('first', 'second')))
+        output = next(row for row in cex['outputs'] if row['wire'] == 1)
+        self.assertEqual(output['first'], output['second'])
+
+    def test_unsatisfiable_is_not_a_vacuous_uniqueness_pass(self):
+        rows = [({1: 1}, {0: 1}, {}), ({1: 1}, {0: 1}, {0: 1})]
+        report = self.analyze(self.file(r1cs(rows, prime=17)))
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'unsatisfiable', report)
+        self.assertEqual(checks['satisfiability']['status'], 'fail')
+        self.assertEqual(checks['output_uniqueness']['status'], 'skipped')
+        self.assertEqual(checks['signal_uniqueness']['status'], 'skipped')
+
+    def test_no_outputs_still_runs_remaining_checks(self):
+        report = self.analyze(self.file(r1cs([({1: 1}, {1: 1}, {0: 1})], wires=2, outputs=0, prime=17)))
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(checks['output_uniqueness']['status'], 'skipped')
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        self.assertEqual(checks['signal_uniqueness']['status'], 'warning', report)
+        report = self.analyze(self.file(r1cs(wires=1, outputs=0, prime=17)))
+        self.assertEqual(report['verdict'], 'not_applicable', report)
+
+    def test_structural_advisories_do_not_change_unique_output_to_unsafe(self):
+        report = self.analyze(self.file(r1cs(CONSTANT * 2 + [({}, {}, {})], prime=17)))
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'warning', report)
+        self.assertEqual(checks['output_uniqueness']['status'], 'pass')
+        self.assertEqual(checks['duplicate_constraints']['count'], 1)
+        self.assertEqual(checks['trivial_constraints']['count'], 1)
+
+    def test_cancellation_in_each_solver_stage_reaps_children(self):
+        before = self.artifacts()
+        for stage in ('Constraint Satisfiability:', 'Output Uniqueness:', 'All-Signal Uniqueness'):
+            with self.subTest(stage=stage):
+                flag = threading.Event()
+                def progress(event):
+                    if event['message'].startswith(stage):
+                        flag.set()
+                report = self.analyze(self.file(r1cs(SQUARE, prime=17)), cancelled=flag.is_set, progress=progress)
+                self.assertTrue(flag.is_set(), report)
+                self.assertEqual(report['verdict'], 'cancelled', report)
+                self.assertEqual(self.artifacts(), before)
+
+    def test_timeout_preserves_completed_satisfiability_and_structural_checks(self):
+        before = self.artifacts()
+        engine = PicusEngine(PicusConfig(timeout_seconds=0.35))
+        report = self.analyze(self.file(r1cs(SQUARE, prime=17)), engine=engine)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'unknown', report)
+        self.assertEqual(checks['satisfiability']['status'], 'pass', report)
+        for key in ('unused_wires', 'trivial_constraints', 'duplicate_constraints'):
+            self.assertEqual(checks[key]['status'], 'pass', report)
+        self.assertEqual(self.artifacts(), before)
 
     def test_timeout_cancel_and_parent_eof_reap_processes(self):
         before = self.artifacts()

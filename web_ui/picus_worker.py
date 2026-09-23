@@ -20,12 +20,17 @@ import tempfile
 import threading
 import time
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
+from cirverify.r1cs import R1CSFile
+from web_ui.r1cs_checks import CHECK_NAMES, aggregate, check_result, prepare_checks
+
 if os.name != 'nt':
     import resource
 
 REVISION = '138b151d3a388e5b6c040c163e0a1db04f2ceda6'
 CVC5_REVISION = 'de62429fa7c03a46d5d75f9d78fc8888792a0798'
-SCOPE = 'Same public and private inputs imply unique public outputs (Picus weak safety).'
+SCOPE = 'Output/all-signal uniqueness, constraint satisfiability, and structural checks.'
 MAX_LINE = 65536
 
 
@@ -68,14 +73,16 @@ def check_environment(prefix):
 
 class PicusOutput:
     """Read the artifact's log events, not a fabricated single JSON result."""
-    def __init__(self):
+    def __init__(self, strong=False):
+        self.strong = strong
         self.logs = deque(maxlen=1000)
         self.log_count = 0
         self.invalid = False
         self.failed = False
         self.final = None
         self.section = None
-        self.values = {'inputs': {}, 'first possible outputs': {}, 'second possible outputs': {}}
+        self.values = {name: {} for name in ('inputs', 'first possible outputs', 'second possible outputs',
+                                           'first internal variables', 'second internal variables')}
         self.cex_truncated = False
         self.cex_invalid = False
         self.stage = 'Starting Picus'
@@ -144,13 +151,49 @@ class PicusOutput:
                   'logs_truncated': self.log_count > len(self.logs), 'counterexample': None}
         if verdict == 'unsafe':
             first, second = (self.values[name] for name in ('first possible outputs', 'second possible outputs'))
-            if not self.cex_invalid and (first or second):
+            internal1, internal2 = (self.values[name] for name in ('first internal variables', 'second internal variables'))
+            if not self.cex_invalid and (first or second or internal1 or internal2):
                 report['counterexample'] = {
                     'inputs': [{'wire': w, 'value': v} for w, v in sorted(self.values['inputs'].items()) if w != 0],
                     'outputs': [{'wire': w, 'first': first.get(w), 'second': second.get(w)}
                                 for w in sorted(first.keys() | second.keys())],
+                    'internal': [{'wire': w, 'first': internal1.get(w), 'second': internal2.get(w)}
+                                 for w in sorted(internal1.keys() | internal2.keys())],
                     'truncated': self.cex_truncated}
         return report
+
+
+class SatisfiabilityOutput:
+    """Only a successful, single cvc5 sat/unsat/unknown response is a conclusion."""
+    def __init__(self):
+        self.stage = 'Checking constraint satisfiability'
+        self.lines = []
+        self.logs = deque(maxlen=1000)
+        self.invalid = False
+
+    def consume(self, line, stderr=False):
+        self.logs.append(('stderr: ' if stderr else '') + line.rstrip()[:1000])
+        if not stderr and line.strip():
+            if line.strip() not in ('sat', 'unsat', 'unknown') or self.lines:
+                self.invalid = True
+            self.lines.append(line.strip()[:100])
+
+    def report(self, code, elapsed, reason=None):
+        value = self.lines[0] if len(self.lines) == 1 else None
+        status, message = {
+            'sat': ('pass', 'At least one assignment satisfies all constraints.'),
+            'unsat': ('fail', 'No assignment satisfies all constraints.'),
+            'unknown': ('unknown', 'The solver could not determine whether the constraints have a solution.'),
+        }.get(value, ('error', 'Invalid or incomplete cvc5 response.'))
+        if reason in ('timeout', 'cancelled'):
+            status = 'unknown' if reason == 'timeout' else 'cancelled'
+            message = 'Satisfiability check timed out.' if reason == 'timeout' else 'Check cancelled.'
+        elif code != 0 or self.invalid:
+            status, message = 'error', 'The cvc5 satisfiability check failed. See the run logs.'
+        return check_result('satisfiability', status, message, solver_result=value,
+                            reason=reason or ('solver_inconclusive' if status == 'unknown' else
+                                              'process_error' if status == 'error' else 'completed'),
+                            elapsed_seconds=round(elapsed, 2), exit_code=code, logs=list(self.logs))
 
 
 def stop_group(process):
@@ -170,6 +213,63 @@ def stop_group(process):
     process.wait(timeout=5)
 
 
+def run_child(command, parsed, job, env, cancelled, deadline, task_started, label):
+    """Each stage owns a process group; return only after its descendants are gone."""
+    started = time.monotonic()
+    process = None
+    reason = None
+    try:
+        if cancelled.is_set() or started >= deadline:
+            return parsed.report(None, 0, 'cancelled' if cancelled.is_set() else 'timeout')
+        process = subprocess.Popen(command, cwd=job, env=env, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        lines = queue.Queue(maxsize=256)
+        def read(stream, stderr):
+            while True:
+                raw = stream.readline(MAX_LINE + 1)
+                if not raw:
+                    break
+                lines.put((raw.decode('utf-8', errors='replace'), stderr))
+            lines.put((None, stderr))
+        for stream, stderr in ((process.stdout, False), (process.stderr, True)):
+            threading.Thread(target=read, args=(stream, stderr), daemon=True).start()
+        ended = 0
+        next_tick = 0
+        while ended < 2 or process.poll() is None:
+            now = time.monotonic()
+            if cancelled.is_set() or now >= deadline:
+                reason = 'cancelled' if cancelled.is_set() else 'timeout'
+                stop_group(process)
+                break
+            try:
+                line, stderr = lines.get(timeout=0.1)
+                if line is None:
+                    ended += 1
+                else:
+                    parsed.consume(line, stderr)
+            except queue.Empty:
+                pass
+            if now >= next_tick:
+                emit('progress', message=f'{label}: {parsed.stage}',
+                     elapsed_seconds=round(now - task_started, 1))
+                next_tick = now + 0.5
+        process.wait(timeout=5)
+        return parsed.report(process.returncode, time.monotonic() - started, reason)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        parsed.consume(str(error), stderr=True)
+        return parsed.report(None, time.monotonic() - started, 'process_error')
+    finally:
+        if process is not None:
+            stop_group(process)
+            for stream in (process.stdout, process.stderr):
+                stream.close()
+            while True:
+                try:
+                    os.waitpid(-1, 0)
+                except ChildProcessError:
+                    break
+
+
 def run(args):
     started = time.monotonic()
     # Adopt solver grandchildren so even orphaned children are reaped here.
@@ -184,10 +284,26 @@ def run(args):
         cancelled.set()  # EOF means the Windows owner disappeared.
     threading.Thread(target=control, daemon=True).start()
     prefix = Path(args.home).expanduser().resolve()
-    parsed = PicusOutput()
-    process = None
+    deadline = started + args.timeout_seconds
+    checks = {key: check_result(key, 'skipped', 'Check did not run.', reason='not_started')
+              for key in CHECK_NAMES}
+    no_outputs = False
+    active = None
+    last_tick = 0
+    preparing = True
+    def checkpoint():
+        nonlocal last_tick
+        now = time.monotonic()
+        if cancelled.is_set() or now >= deadline:
+            raise InterruptedError('cancelled' if cancelled.is_set() else 'timeout')
+        if preparing and now >= last_tick:
+            emit('progress', message='Scanning constraints and preparing satisfiability query',
+                 elapsed_seconds=round(now - started, 1))
+            last_tick = now + 0.5
+
     with tempfile.TemporaryDirectory(prefix='cirverify_picus_') as job:
         try:
+            checkpoint()
             path = Path(job) / 'circuit.r1cs'
             shutil.copyfile(args.file, path)
             env = environment(prefix)
@@ -195,60 +311,71 @@ def run(args):
             # This worker is a disposable process. Limits are inherited by every child.
             memory = args.memory_mib * 1024 * 1024
             resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
-            process = subprocess.Popen(
-                ['racket', str(prefix / 'Picus/picus.rkt'), '--json', '-', '--truncate', 'off',
-                 '--log-level', 'PROGRESS', '--solver', 'cvc5', '--timeout', str(args.query_timeout_ms), str(path)],
-                cwd=job, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, start_new_session=True)
-            lines = queue.Queue(maxsize=256)
-            def read(stream, stderr):
-                while True:
-                    raw = stream.readline(MAX_LINE + 1)
-                    if not raw:
-                        break
-                    lines.put((raw.decode('utf-8', errors='replace'), stderr))
-                lines.put((None, stderr))
-            readers = [threading.Thread(target=read, args=(process.stdout, False), daemon=True),
-                       threading.Thread(target=read, args=(process.stderr, True), daemon=True)]
-            for reader in readers:
-                reader.start()
-            ended = 0
-            reason = None
-            next_tick = 0
-            while ended < 2 or process.poll() is None:
-                elapsed = time.monotonic() - started
-                if cancelled.is_set() or elapsed >= args.timeout_seconds:
-                    reason = 'cancelled' if cancelled.is_set() else 'timeout'
-                    stop_group(process)
-                    break
-                try:
-                    line, stderr = lines.get(timeout=0.1)
-                    if line is None:
-                        ended += 1
-                    else:
-                        parsed.consume(line, stderr)
-                except queue.Empty:
-                    pass
-                if elapsed >= next_tick:
-                    emit('progress', message=parsed.stage, elapsed_seconds=round(elapsed, 1))
-                    next_tick = elapsed + 0.5
-            process.wait(timeout=5)
-            report = parsed.report(process.returncode, time.monotonic() - started, reason)
-        except (OSError, ValueError, subprocess.SubprocessError) as error:
-            parsed.log(str(error))
-            report = parsed.report(None, time.monotonic() - started, 'process_error')
-        finally:
-            if process is not None:
-                stop_group(process)
-                for stream in (process.stdout, process.stderr):
-                    stream.close()
-                # All adopted children received SIGKILL in stop_group.
-                while True:
-                    try:
-                        os.waitpid(-1, 0)
-                    except ChildProcessError:
-                        break
+            reader = R1CSFile(path)
+            no_outputs = not reader.metadata['public_outputs']
+            if no_outputs:
+                checks['output_uniqueness'] = check_result('output_uniqueness', 'skipped',
+                    'No public outputs to check.', reason='no_outputs')
+            query_path = Path(job) / 'constraints.smt2'
+            for check in prepare_checks(reader, query_path, checkpoint):
+                checks[check['id']] = check
+            preparing = False
+            active = 'satisfiability'
+            checks[active] = run_child(
+                [str(prefix / 'bin/cvc5'), '--lang', 'smt2', f'--tlimit-per={args.query_timeout_ms}', str(query_path)],
+                SatisfiabilityOutput(), job, env, cancelled,
+                min(deadline, time.monotonic() + args.query_timeout_ms / 1000 + 2), started, CHECK_NAMES[active])
+            if checks[active]['status'] == 'fail':
+                for key in ('output_uniqueness', 'signal_uniqueness'):
+                    if checks[key].get('reason') != 'no_outputs':
+                        checks[key] = check_result(key, 'skipped',
+                            'Skipped because the constraint system has no solution.', reason='unsatisfiable')
+            else:
+                for strong in (False, True):
+                    active = 'signal_uniqueness' if strong else 'output_uniqueness'
+                    if not strong and no_outputs:
+                        continue
+                    checkpoint()
+                    # Reserve half the remaining task budget for strong mode.
+                    stage_deadline = deadline if strong else time.monotonic() + max(0, deadline - time.monotonic()) / 2
+                    command = ['racket', str(prefix / 'Picus/picus.rkt'), '--json', '-', '--truncate', 'off',
+                               '--log-level', 'PROGRESS', '--solver', 'cvc5', '--timeout', str(args.query_timeout_ms)]
+                    raw = run_child(command + (['--strong'] if strong else []) + [str(path)],
+                                    PicusOutput(strong), job, env, cancelled, stage_deadline, started, CHECK_NAMES[active])
+                    status = {'safe': 'pass', 'unsafe': 'warning' if strong else 'fail',
+                              'unknown': 'unknown', 'error': 'error', 'cancelled': 'cancelled'}[raw['verdict']]
+                    messages = {
+                        'pass': 'All signals are uniquely determined by the inputs.' if strong else 'Output uniqueness verified.',
+                        'warning': 'Some output or internal wires are not uniquely determined. Review the counterexample.',
+                        'fail': 'Picus found different valid outputs for identical inputs.',
+                        'unknown': 'Uniqueness could not be determined within the time limit.',
+                        'error': 'Picus could not complete this check. See the run logs.',
+                        'cancelled': 'Check cancelled.',
+                    }
+                    checks[active] = check_result(active, status, messages[status],
+                        **{k: raw[k] for k in ('verdict', 'reason', 'elapsed_seconds', 'exit_code', 'counterexample', 'logs', 'logs_truncated')})
+            active = None
+            checkpoint()
+        except (OSError, ValueError, MemoryError, subprocess.SubprocessError) as error:
+            reason = str(error) if isinstance(error, InterruptedError) else 'runtime_error'
+            status = {'timeout': 'unknown', 'cancelled': 'cancelled'}.get(reason, 'error')
+            for key, check in checks.items():
+                if check.get('reason') == 'not_started' or key == active:
+                    checks[key] = check_result(key, status,
+                        'Task time limit reached.' if reason == 'timeout' else 'Check cancelled.' if reason == 'cancelled'
+                        else f'Analysis could not complete: {error}', reason=reason)
     # Emit the terminal result only after processes and temporary files are gone.
+    results = list(checks.values())
+    verdict, reason = aggregate(results, no_outputs)
+    if cancelled.is_set():
+        verdict, reason = 'cancelled', 'cancelled'
+    logs = [f'[{item["name"]}] {line}' for item in results for line in item.get('logs', [])]
+    report = {'kind': 'r1cs', 'engine': 'picus', 'revision': REVISION, 'solver': 'cvc5',
+              'scope': SCOPE, 'verdict': verdict, 'reason': reason, 'checks': results,
+              'elapsed_seconds': round(time.monotonic() - started, 2),
+              'exit_code': checks['output_uniqueness'].get('exit_code'),
+              'counterexample': checks['output_uniqueness'].get('counterexample'),
+              'logs': logs[-1000:], 'logs_truncated': len(logs) > 1000 or any(c.get('logs_truncated') for c in results)}
     emit('result', report=report)
 
 

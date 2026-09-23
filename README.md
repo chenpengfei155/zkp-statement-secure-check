@@ -251,7 +251,7 @@ The main controls are:
 | Select Example | Load a built-in example into the editor |
 | Upload File | Open `.circom` source or a binary `.r1cs` file for viewing and analysis |
 | Select Folder | Load the folder's `.circom` files into the file list, then select one to open |
-| Analyze | Run source checks for the active `.circom` tab, or Picus output-uniqueness checks for `.r1cs` |
+| Analyze | Run source checks for `.circom`, or six R1CS checks using Picus, cvc5 and structural analysis |
 | Stop | Request cancellation; background detection may continue until the current computation finishes |
 | Clear | Close all file tabs, clear results, and release temporary R1CS uploads |
 
@@ -282,7 +282,7 @@ Circom source report, follow the [CLI examples](#example-usage) and use `--json`
 4. **Signed coefficients** is the default: for example, `p−1` appears as `−1`.
    Select **Original coefficients** to display the original nonnegative coefficients.
    Both views describe the same arithmetic modulo the modulus stored in the file.
-5. Install Picus once as described below, then click **Analyze** for the uniqueness
+5. Install Picus once as described below, then click **Analyze** for the six-check
    verdict, available counterexample and execution log.
    **Stop** cancels an active check; results stay with their file tab.
 
@@ -310,12 +310,25 @@ starting the web server.
 The installer uses a private Racket 8.16 runtime and runs real safe/unsafe smoke
 tests. Recheck offline with `.\.venv\Scripts\python.exe .\scripts\check_picus.py`.
 
-Picus checks **unique public outputs for the same public AND private inputs**
-(default weak safety, not `--strong`). `safe` means this property was verified;
-it does not establish business correctness, satisfiability or general security.
-`unsafe` reports underconstraint, with available counterexamples. `unknown`
-means inconclusive, never passing. Errors and cancellation are shown separately.
-Files with no public outputs are reported as not applicable.
+Each analysis now reports six independent checks:
+
+| Check | Meaning |
+|---|---|
+| Constraint Satisfiability | cvc5 checks whether at least one assignment satisfies all equations. |
+| Output Uniqueness | Picus checks that identical public AND private inputs imply unique public outputs. |
+| All-Signal Uniqueness | Picus `--strong` also checks internal wires; ambiguity is a finding for review, not automatically an exploitable bug. |
+| Unused Wires | Finds wires absent from effective constraints after cancellation, excluding the constant w0. |
+| Trivial Constraints | Finds equations that simplify to the zero polynomial, `0 = 0`. |
+| Duplicate Constraints | Finds repeated identical polynomials after expansion and reduction modulo the file's modulus; this does not detect all implied or redundant constraints. |
+
+`safe` means all six checks passed; `unsafe` means different outputs were found
+for identical inputs. `warning` indicates strong-mode or structural findings to
+review. `unsatisfiable` means no assignment satisfies the constraints, and both
+uniqueness checks are skipped to avoid a vacuous pass. `unknown` is inconclusive,
+never passing. Each check retains its own result, including when another check
+times out. Errors and cancellation are shown separately. With no public outputs,
+only output uniqueness is skipped; the other checks still run, and the overall
+report is not a green pass.
 Results use the same **Analysis Result** heading and text-log style as Circom,
 with English messages and expandable **Run details and raw logs**.
 For example, an output fixed to zero is unique, but may not implement the XOR
@@ -328,7 +341,11 @@ Custom gates are unsupported. Source recovery, proof generation, CLI and folder
 R1CS analysis are outside this feature.
 
 Defaults: 5 seconds per solver query, 120 seconds per task, 4 GiB address-space
-limit per Linux child process, and one R1CS task at a time. **Stop**, closing or
+limit per Linux child process, and one R1CS task at a time. After satisfiability,
+output uniqueness receives half the remaining task time, reserving time for
+strong mode. Structural checks have work limits and display partial coverage
+when those limits are reached; they never treat an incomplete scan as passing.
+**Stop**, closing or
 replacing a file, and **Clear** cancel its process group. An unavailable Picus
 installation does not affect Circom analysis or R1CS viewing.
 See [configuration and tests](web_ui/README.md#picus-configuration).

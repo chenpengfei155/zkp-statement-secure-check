@@ -10,13 +10,28 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 from web_ui import app as web
-from web_ui.picus import PicusEngine, empty_report
-from web_ui.picus_worker import PicusOutput, REVISION
+from web_ui.picus import PicusEngine, empty_report, valid_checks
+from web_ui.picus_worker import PicusOutput, SatisfiabilityOutput, REVISION
 from web_ui.r1cs_store import R1CSStore
 from picus_fixtures import BN254, CONSTANT, r1cs
 
 
 class LogTests(unittest.TestCase):
+    def test_suite_rejects_missing_or_inconclusive_checks_under_safe_headline(self):
+        report = empty_report('safe', 'completed')
+        self.assertFalse(valid_checks(report))
+        for check in report['checks']:
+            check['status'] = 'pass'
+        self.assertTrue(valid_checks(report))
+        report['checks'][0]['status'] = 'skipped'
+        self.assertFalse(valid_checks(report))
+        report['checks'][0]['status'] = 'unknown'
+        self.assertFalse(valid_checks(report))
+        report['verdict'] = 'unknown'
+        self.assertTrue(valid_checks(report))
+        report['checks'].pop()
+        self.assertFalse(valid_checks(report))
+
     def event(self, output, text, level='INFO'):
         output.consume(json.dumps({'msg': text, 'logger_name': 'picus', 'level': level}))
 
@@ -138,9 +153,9 @@ class WebPicusTests(unittest.TestCase):
     def test_no_outputs_and_optimized_inputs(self):
         identifier = self.upload(r1cs(wires=1, outputs=0))
         response = self.client.post(f'/r1cs/{identifier}/analyze')
-        self.assertEqual(self.result(response.json['session_id'])['verdict'], 'not_applicable')
-        self.engine.status.assert_not_called()
-        self.engine.analyze.assert_not_called()
+        self.result(response.json['session_id'])
+        self.engine.status.assert_called_once()
+        self.engine.analyze.assert_called_once()  # satisfiability/strong checks still apply
         identifier = self.upload(r1cs(CONSTANT, private=2))
         response = self.client.post(f'/r1cs/{identifier}/analyze')
         self.assertEqual(response.status_code, 422)

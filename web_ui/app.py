@@ -420,17 +420,16 @@ def analyze_r1cs_upload(file_id):
         store.release(file_id)
         r1cs_analysis_lock.release()
         return jsonify({'error': 'Picus cannot map this file’s inputs to wires. Recompile with --O0 and upload again.'}), 422
-    if metadata['public_outputs']:
-        try:
-            engine_status = picus_engine.status()
-        except Exception:
-            store.release(file_id)
-            r1cs_analysis_lock.release()
-            raise
-        if not engine_status['ready']:
-            store.release(file_id)
-            r1cs_analysis_lock.release()
-            return jsonify({'error': engine_status['reason']}), 503
+    try:
+        engine_status = picus_engine.status()
+    except Exception:
+        store.release(file_id)
+        r1cs_analysis_lock.release()
+        raise
+    if not engine_status['ready']:
+        store.release(file_id)
+        r1cs_analysis_lock.release()
+        return jsonify({'error': engine_status['reason']}), 503
     session_id = str(uuid.uuid4())
     messages = queue.Queue()
     cancelled = threading.Event()
@@ -447,11 +446,8 @@ def analyze_r1cs_upload(file_id):
     def run():
         report = None
         try:
-            if not metadata['public_outputs']:
-                report = empty_report('not_applicable', 'no_outputs')
-            else:
-                report = picus_engine.analyze(reader, cancelled=cancelled.is_set,
-                                              progress=lambda data: messages.put(('progress', data)))
+            report = picus_engine.analyze(reader, cancelled=cancelled.is_set,
+                                          progress=lambda data: messages.put(('progress', data)))
         except Exception as error:
             app.logger.exception('R1CS analysis failed')
             report = empty_report('error', 'runtime_error')

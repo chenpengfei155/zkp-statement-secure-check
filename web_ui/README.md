@@ -2,7 +2,7 @@
 
 [English project guide](../README.md) | [简体中文项目说明](../README.zh-CN.md)
 
-A web interface for analyzing Circom source, viewing binary R1CS constraints and checking output uniqueness with Picus.
+A web interface for analyzing Circom source, viewing binary R1CS constraints and running six R1CS checks with Picus, cvc5 and structural analysis.
 
 ## Features
 
@@ -63,7 +63,7 @@ The web interface has no JSON download button. Use the
 ### R1CS Constraint Viewer and Analysis
 
 Use **Upload File** to open `demo1.r1cs`. The viewer opens automatically and offers
-**Analyze** for Picus output-uniqueness checks. Its compact overview shows the file size, constraint/variable
+**Analyze** for six R1CS checks. Its compact overview shows the file size, constraint/variable
 counts and public/private input and public output counts. Expand **Field modulus
 & reading guide** for the full modulus and explanation. The **← / →** buttons
 page through 50 equations at a time in the form `A × B − C = 0`.
@@ -85,14 +85,31 @@ files. It does not restore source or generate proofs.
 Folder selection and the CLI remain Circom-only.
 
 Click **Analyze** after the [one-time Picus installation](../README.md#install-picus-once-windows--wsl).
-The report displays `safe`, `unsafe`, or `unknown`, plus elapsed time and logs.
+The report lists satisfiability, output uniqueness, all-signal uniqueness
+(including internal wires), unused wires, trivial constraints and duplicate
+constraints. Each has a separate pass, finding, unknown, error or skipped status.
 It uses Circom's **Analysis Result** heading, light result panel and English
 `[Info]`, `[Success]` or `[Warning]` text output. Counterexamples appear below the
 summary; **Run details and raw logs** retains the original Picus output.
-Picus checks unique public outputs for identical public and private inputs;
-it does not prove business correctness or general satisfiability. No public
-outputs means `not_applicable`, not a passing result. Counterexamples show
-wire numbers and two alternative outputs, with decimal strings preserving precision.
+Picus checks unique public outputs for identical public and private inputs and
+then uses `--strong` to include internal wires. cvc5 separately checks whether
+at least one satisfying assignment exists. Unsatisfiable systems skip uniqueness
+checks. No public outputs skips only output uniqueness; the remaining checks
+run without a green overall pass. Counterexamples show wire numbers and two
+alternative outputs/internal values, with decimal strings preserving precision.
+Structural and strong-mode findings produce an advisory `warning`, whereas
+non-unique outputs produce `unsafe`, and inconsistent constraints produce
+`unsatisfiable`. `safe` requires all six checks to pass; `unknown` never counts
+as passing. These properties do not establish intended business functionality.
+
+Structural checks expand A*B-C modulo the file's modulus, eliminating zero
+coefficients and treating w0 as 1. Duplicate detection compares identical
+normalized polynomials (not all scalar multiples or implied constraints).
+Expansion is capped at 20,000 term operations per row and 1,000,000 per file;
+the duplicate index holds at most 100,000 unique fingerprints. Incomplete scans
+are marked partial/unknown, with at most 100 displayed findings per check.
+Large rows use conservative wire occurrence tracking to avoid false unused-wire
+findings. Counts include all findings discovered within the scan budget.
 
 ### Picus configuration
 
@@ -105,6 +122,12 @@ Set these **server-side environment variables** before starting Flask:
 | `CIRVERIFY_PICUS_TIMEOUT` | `120` seconds per task |
 | `CIRVERIFY_PICUS_QUERY_TIMEOUT_MS` | `5000` milliseconds per solver query |
 | `CIRVERIFY_PICUS_MEMORY_MIB` | `4096` per Linux child process |
+
+The 120-second budget covers the entire six-check task. The standalone cvc5
+satisfiability query uses the same 5-second query limit (plus a two-second
+process watchdog allowance). Output uniqueness gets half the time remaining
+after that stage; strong mode gets the rest. Each stage uses a supervised
+process group so cancellation/timeout releases descendants and temporary files.
 
 The fixed Picus revision is `138b151d3a388e5b6c040c163e0a1db04f2ceda6`;
 cvc5 is built at `de62429fa7c03a46d5d75f9d78fc8888792a0798` with CoCoA.
@@ -158,7 +181,9 @@ $env:CIRVERIFY_TEST_PICUS = "1"
 
 The real-engine suite compares the demo's web result to the upstream command,
 checks both counterexample outputs against `out² = 1` in two fields, and tests
-zero constraints, reordered sections, Unicode paths, timeout, cancellation,
+unique outputs with ambiguous internal wires, inconsistent systems, no-output
+circuits, structural advisories, zero constraints, reordered sections, Unicode paths,
+timeouts that preserve completed checks, cancellation in each solver stage,
 parent-pipe closure, process reaping and temporary-directory cleanup. The
 installer also runs real `safe`/`unsafe` smoke tests before reporting success.
 

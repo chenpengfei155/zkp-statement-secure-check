@@ -74,7 +74,7 @@ class R1CSViewer {
             fetch('/r1cs/engine').then(response => response.json()).then(info => {
                 if (this.state !== state) return;
                 hint.textContent = info.ready
-                    ? 'Engine: Picus · Click Analyze to check output uniqueness. Results appear below.'
+                    ? 'Picus + cvc5 · Analyze runs uniqueness, satisfiability and structural checks.'
                     : info.reason;
             }).catch(() => {
                 if (this.state === state) hint.textContent = 'Could not check the Picus environment. Check the web service.';
@@ -145,7 +145,15 @@ function renderR1CSReport(container, report) {
         error: {style: 'error', level: 'Error', message: 'Analysis did not complete.'},
         cancelled: {style: 'info', level: 'Info', message: 'Analysis cancelled by the user.'},
         not_applicable: {style: 'info', level: 'Info', message: 'No public outputs to check.'},
+        warning: {style: 'warning', level: 'Warning', message: 'Analysis completed with findings to review.'},
+        unsatisfiable: {style: 'error', level: 'Error', message: 'The constraints have no solution.'},
     };
+    const checks = Array.isArray(report.checks) ? report.checks : null;
+    if (checks) {
+        outcomes.safe.message = 'All six checks passed.';
+        outcomes.unknown.message = 'Some checks could not reach a conclusion.';
+        outcomes.not_applicable.message = 'No public outputs; see the remaining check results below.';
+    }
     const verdict = Object.hasOwn(outcomes, report.verdict) ? report.verdict : 'error';
     const outcome = outcomes[verdict];
     container.className = `result ${outcome.style} r1cs-report`;
@@ -170,9 +178,21 @@ function renderR1CSReport(container, report) {
     const lines = [
         logLine('Info', `File: ${report.filename || 'Not provided'}`),
         logLine('Info', `Engine: Picus | Solver: ${report.solver || 'cvc5'}`),
-        logLine('Info', 'Checking output uniqueness for identical public and private inputs.'),
-        logLine(outcome.level, outcome.message),
+        logLine('Info', checks ? 'Uniqueness, satisfiability and structural checks.'
+            : 'Checking output uniqueness for identical public and private inputs.'),
     ];
+    if (checks) {
+        const levels = {pass: 'Success', fail: 'Warning', warning: 'Warning', unknown: 'Unknown',
+            error: 'Error', cancelled: 'Cancelled', skipped: 'Skipped'};
+        lines.push('');
+        for (const check of checks) {
+            const level = check.id === 'satisfiability' && check.status === 'fail' ? 'Error'
+                : Object.hasOwn(levels, check.status) ? levels[check.status] : 'Error';
+            lines.push(logLine(level, `${check.name}: ${check.message}`));
+        }
+        lines.push('');
+    }
+    lines.push(logLine(outcome.level, outcome.message));
     if (Object.hasOwn(reasons, report.reason)) lines.push(logLine(outcome.level, reasons[report.reason]));
     if (Number.isFinite(report.elapsed_seconds)) {
         lines.push(logLine('Timeit', `Elapsed time: ${report.elapsed_seconds} s`));
@@ -180,9 +200,25 @@ function renderR1CSReport(container, report) {
     lines.push('', '='.repeat(50), `Result: ${verdict}`);
     container.append(element('h3', 'Analysis Result'));
     container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
-    if (verdict === 'unsafe') {
-        container.append(element('h4', 'Counterexample: same inputs, different outputs'));
-        const cex = report.counterexample;
+    for (const check of checks || []) {
+        if (!check.findings?.length) continue;
+        const findingDetails = element('details', '', 'picus-logs');
+        findingDetails.append(element('summary', `${check.name}: ${check.count} finding(s)`));
+        const list = check.findings.map(item => item.wire != null ? `w${item.wire}`
+            : item.duplicate_of != null ? `Constraint #${item.constraint + 1} repeats #${item.duplicate_of + 1}`
+            : `Constraint #${item.constraint + 1} simplifies to 0 = 0`);
+        findingDetails.append(element('pre', list.join('\n')));
+        if (check.truncated) findingDetails.append(element('p', 'Showing the first 100 findings.'));
+        if (!check.complete) findingDetails.append(element('p', 'Partial scan: structural-check work limit reached.'));
+        container.append(findingDetails);
+    }
+    const counterexamples = checks ? checks.filter(check => check.verdict === 'unsafe')
+        : verdict === 'unsafe' ? [{id: 'output_uniqueness', counterexample: report.counterexample}] : [];
+    for (const check of counterexamples) {
+        container.append(element('h4', check.id === 'signal_uniqueness'
+            ? 'All-signal counterexample: same inputs, different signal values'
+            : 'Counterexample: same inputs, different outputs'));
+        const cex = check.counterexample;
         if (cex) {
             const table = (headers, rows, differs = () => false) => {
                 const wrap = element('div', '', 'report-table-wrap');
@@ -199,11 +235,14 @@ function renderR1CSReport(container, report) {
                 });
                 node.append(head, body); wrap.append(node); container.append(wrap);
             };
-            if (cex.inputs.length) table(['Input wire', 'Shared input value'],
+            if (cex.inputs?.length) table(['Input wire', 'Shared input value'],
                 cex.inputs.map(item => [`w${item.wire}`, item.value]));
             else container.append(element('p', 'No input values were listed in the counterexample.'));
-            table(['Output wire', 'First output', 'Second output'],
+            if (cex.outputs?.length) table(['Output wire', 'First output', 'Second output'],
                 cex.outputs.map(item => [`w${item.wire}`, item.first, item.second]),
+                values => values[1] != null && values[2] != null && values[1] !== values[2]);
+            if (cex.internal?.length) table(['Internal wire', 'First value', 'Second value'],
+                cex.internal.map(item => [`w${item.wire}`, item.first, item.second]),
                 values => values[1] != null && values[2] != null && values[1] !== values[2]);
             if (cex.truncated) container.append(element('p', 'Only the first 500 variables in each group are shown.'));
         } else {

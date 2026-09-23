@@ -11,6 +11,7 @@ import threading
 import time
 
 from .picus_worker import REVISION, SCOPE
+from .r1cs_checks import CHECK_NAMES, aggregate, check_result
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,26 @@ def empty_report(verdict, reason):
     return {'kind': 'r1cs', 'engine': 'picus', 'revision': REVISION, 'solver': 'cvc5',
             'scope': SCOPE, 'verdict': verdict, 'reason': reason,
             'elapsed_seconds': 0, 'exit_code': None, 'logs': [],
-            'logs_truncated': False, 'counterexample': None}
+            'logs_truncated': False, 'counterexample': None,
+            'checks': [check_result(key, 'cancelled' if verdict == 'cancelled' else 'error' if verdict == 'error'
+                                    else 'unknown', 'Check did not complete.', reason=reason)
+                       for key in CHECK_NAMES]}
+
+
+def valid_checks(report):
+    """Do not accept a passing headline with missing or inconclusive check results."""
+    checks = report.get('checks')
+    if not isinstance(checks, list) or len(checks) != len(CHECK_NAMES):
+        return False
+    statuses = {'pass', 'fail', 'warning', 'unknown', 'error', 'cancelled', 'skipped'}
+    if any(not isinstance(item, dict) or not isinstance(item.get('id'), str)
+           or not isinstance(item.get('status'), str) or item['status'] not in statuses for item in checks):
+        return False
+    if {item['id'] for item in checks} != set(CHECK_NAMES):
+        return False
+    no_outputs = any(c['id'] == 'output_uniqueness' and c.get('reason') == 'no_outputs' for c in checks)
+    expected, _ = aggregate(checks, no_outputs)
+    return report.get('verdict') == expected or report.get('verdict') == 'cancelled'
 
 
 class PicusEngine:
@@ -152,8 +172,10 @@ class PicusEngine:
                             progress({k: event[k] for k in ('message', 'elapsed_seconds')})
                         elif event['type'] == 'result' and report is None:
                             candidate = event['report']
-                            if not isinstance(candidate, dict) or candidate.get('engine') != 'picus' or candidate.get('revision') != REVISION or candidate.get('verdict') not in ('safe', 'unsafe', 'unknown', 'error', 'cancelled'):
+                            if not isinstance(candidate, dict) or candidate.get('engine') != 'picus' or candidate.get('revision') != REVISION or candidate.get('verdict') not in ('safe', 'unsafe', 'unknown', 'error', 'cancelled', 'warning', 'unsatisfiable', 'not_applicable'):
                                 raise ValueError('Unexpected Picus report')
+                            if not valid_checks(candidate):
+                                raise ValueError('Missing or inconsistent R1CS check results')
                             report = candidate
                         else:
                             raise ValueError('Unexpected supervisor event')
