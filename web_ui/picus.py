@@ -1,5 +1,5 @@
-"""Windows/WSL bridge. No client-supplied command or filesystem path is accepted."""
-from dataclasses import dataclass
+"""Native Picus bridge. No client-supplied command or filesystem path is accepted."""
+from dataclasses import dataclass, field
 import json
 import math
 import os
@@ -9,28 +9,31 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 
 from .picus_worker import REVISION, SCOPE
 from .r1cs_checks import CHECK_NAMES, aggregate, check_result
+from .picus_runtime import default_home
 
 
 @dataclass(frozen=True)
 class PicusConfig:
-    distro: str = 'Ubuntu-22.04'
-    home: str = '~/.local/share/cirverify-picus'
+    home: str = field(default_factory=default_home)
     timeout_seconds: float = 120
     query_timeout_ms: int = 5000
     memory_mib: int = 4096
 
+    def __post_init__(self):
+        if (not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0
+                or self.query_timeout_ms <= 0 or self.memory_mib < 256):
+            raise ValueError('Invalid Picus time or memory limits.')
+
     @classmethod
     def from_env(cls):
-        config = cls(os.getenv('CIRVERIFY_PICUS_DISTRO', cls.distro),
-                     os.getenv('CIRVERIFY_PICUS_HOME', cls.home),
+        config = cls(os.getenv('CIRVERIFY_PICUS_HOME', default_home()),
                      float(os.getenv('CIRVERIFY_PICUS_TIMEOUT', cls.timeout_seconds)),
                      int(os.getenv('CIRVERIFY_PICUS_QUERY_TIMEOUT_MS', cls.query_timeout_ms)),
                      int(os.getenv('CIRVERIFY_PICUS_MEMORY_MIB', cls.memory_mib)))
-        if not math.isfinite(config.timeout_seconds) or config.timeout_seconds <= 0 or config.query_timeout_ms <= 0 or config.memory_mib < 256:
-            raise ValueError('Invalid Picus time or memory limits.')
         return config
 
 
@@ -72,20 +75,9 @@ class PicusEngine:
         self._checked = 0
         self._lock = threading.Lock()
 
-    def linux_path(self, path):
-        if os.name != 'nt':
-            return str(Path(path).resolve())
-        result = subprocess.run(['wsl.exe', '-d', self.config.distro, '--exec', 'wslpath', '-u',
-                                 str(Path(path).resolve())], capture_output=True, timeout=10,
-                                encoding='utf-8', errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)
-        if result.returncode:
-            raise RuntimeError('Cannot access WSL/Ubuntu. Check CIRVERIFY_PICUS_DISTRO.')
-        return result.stdout.strip()
-
     def command(self, mode):
-        script = self.linux_path(Path(__file__).with_name('picus_worker.py'))
-        prefix = ['wsl.exe', '-d', self.config.distro, '--exec', 'python3'] if os.name == 'nt' else [sys.executable]
-        return prefix + [script, mode, '--home', self.config.home]
+        script = str(Path(__file__).with_name('picus_worker.py').resolve())
+        return [sys.executable, script, mode, '--home', self.config.home]
 
     def status(self, refresh=False):
         if self.configuration_error:
@@ -117,8 +109,12 @@ class PicusEngine:
             raise RuntimeError(self.configuration_error)
         if cancelled():
             return empty_report('cancelled', 'cancelled')
+        with tempfile.TemporaryDirectory(prefix='cirverify_picus_') as job:
+            return self._analyze_in_directory(reader, cancelled=cancelled, progress=progress, job=job)
+
+    def _analyze_in_directory(self, reader, *, cancelled, progress, job):
         config = self.config
-        command = self.command('run') + ['--file', self.linux_path(reader.path),
+        command = self.command('run') + ['--file', str(Path(reader.path).resolve()), '--job-dir', job,
                    '--timeout-seconds', str(config.timeout_seconds),
                    '--query-timeout-ms', str(config.query_timeout_ms),
                    '--memory-mib', str(config.memory_mib)]
@@ -127,19 +123,28 @@ class PicusEngine:
         messages = queue.Queue(maxsize=128)
         diagnostic = []
         invalid = False
+        stop_reader = threading.Event()
+        def enqueue(item):
+            while not stop_reader.is_set():
+                try:
+                    messages.put(item, timeout=0.1)
+                    return
+                except queue.Full:
+                    pass
         def read(stream, stderr):
-            while True:
+            while not stop_reader.is_set():
                 line = stream.readline(8 * 1024 * 1024 + 1)
                 if not line:
                     break
-                messages.put((line.decode('utf-8', errors='replace'), stderr))
-            messages.put((None, stderr))
+                enqueue((line.decode('utf-8', errors='replace'), stderr))
+            enqueue((None, stderr))
         threads = [threading.Thread(target=read, args=(process.stdout, False), daemon=True),
                    threading.Thread(target=read, args=(process.stderr, True), daemon=True)]
         for thread in threads:
             thread.start()
         started = time.monotonic()
         sent_cancel = False
+        cancelled_at = None
         timed_out = False
         ended = 0
         report = None
@@ -149,13 +154,16 @@ class PicusEngine:
                 if (cancelled() or elapsed > config.timeout_seconds + 10) and not sent_cancel:
                     timed_out = not cancelled()
                     sent_cancel = True
+                    cancelled_at = time.monotonic()
                     try:
                         process.stdin.write(b'cancel\n')
                         process.stdin.flush()
                     except (BrokenPipeError, OSError):
                         pass
-                if elapsed > config.timeout_seconds + 25:
-                    raise TimeoutError('The Picus supervisor did not finish cleanup in time.')
+                if cancelled_at is not None and time.monotonic() - cancelled_at > 10:
+                    report = empty_report('unknown' if timed_out else 'cancelled',
+                                          'timeout' if timed_out else 'cancelled')
+                    return report
                 try:
                     line, stderr = messages.get(timeout=0.1)
                 except queue.Empty:
@@ -191,7 +199,8 @@ class PicusEngine:
                 report['verdict'], report['reason'] = 'unknown', 'timeout'
             return report
         finally:
-            # EOF tells the Linux supervisor to kill/reap its own process group.
+            # EOF requests graceful cleanup. If the worker must be killed,
+            # Windows closes its Job Object handles and kills solver descendants.
             try:
                 process.stdin.close()
             except OSError:
@@ -201,5 +210,8 @@ class PicusEngine:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+            stop_reader.set()
+            for thread in threads:
+                thread.join(timeout=2)
             process.stdout.close()
             process.stderr.close()

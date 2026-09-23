@@ -74,7 +74,7 @@ class R1CSViewer {
             fetch('/r1cs/engine').then(response => response.json()).then(info => {
                 if (this.state !== state) return;
                 hint.textContent = info.ready
-                    ? 'Picus + cvc5 · Analyze runs uniqueness, satisfiability and structural checks.'
+                    ? `${info.platform === 'windows-native' ? 'Native Windows ' : ''}Picus + cvc5 · Analyze runs uniqueness, satisfiability and structural checks.`
                     : info.reason;
             }).catch(() => {
                 if (this.state === state) hint.textContent = 'Could not check the Picus environment. Check the web service.';

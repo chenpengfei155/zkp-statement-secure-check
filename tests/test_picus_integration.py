@@ -15,6 +15,8 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 from cirverify.r1cs import R1CSFile
 from web_ui import app as web
 from web_ui.picus import PicusConfig, PicusEngine
+from web_ui.picus_runtime import picus_command
+from web_ui.picus_worker import environment
 from web_ui.r1cs_store import R1CSStore
 from picus_fixtures import BN254, CONSTANT, SQUARE, r1cs
 
@@ -40,18 +42,27 @@ class RealPicusTests(unittest.TestCase):
     def analyze(self, reader, engine=None, cancelled=lambda: False, progress=lambda _: None):
         return (engine or self.engine).analyze(reader, cancelled=cancelled, progress=progress)
 
-    def linux(self, *args, **kwargs):
-        prefix = ['wsl.exe', '-d', self.engine.config.distro, '--exec'] if os.name == 'nt' else []
-        return subprocess.run(prefix + list(args), capture_output=True, encoding='utf8', timeout=150, **kwargs)
-
     def artifacts(self):
-        result = self.linux('python3', '-c',
+        if os.name == 'nt':
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-Command',
+                "@(Get-Process picus,cvc5 -ErrorAction SilentlyContinue | "
+                "Select-Object Id,Path) | ConvertTo-Json -Compress"],
+                capture_output=True, encoding='utf8', timeout=10)
+            # Only inspect descendants belonging to this installation.
+            processes = json.loads(result.stdout or '[]')
+            if isinstance(processes, dict):
+                processes = [processes]
+            home = str(Path(self.engine.config.home).resolve()).lower()
+            return {'dirs': sorted(str(p) for p in Path(tempfile.gettempdir()).glob('cirverify_picus_*')),
+                    'processes': sorted(p['Id'] for p in processes if (p['Path'] or '').lower().startswith(home))}
+        result = subprocess.run([sys.executable, '-c',
             'import glob,json,os\n'
             'def owned(p):\n'
             ' try: return os.readlink(p).startswith("/tmp/cirverify_picus_")\n'
             ' except OSError: return False\n'
             'print(json.dumps({"dirs":sorted(glob.glob("/tmp/cirverify_picus_*")),'
-            '"processes":[p for p in glob.glob("/proc/[0-9]*/cwd") if owned(p)]}))')
+            '"processes":[p for p in glob.glob("/proc/[0-9]*/cwd") if owned(p)]}))'],
+            capture_output=True, encoding='utf8', timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
@@ -72,14 +83,13 @@ class RealPicusTests(unittest.TestCase):
             self.assertEqual(len(report['checks']), 6)
             self.assertTrue(all(check['status'] == 'pass' for check in report['checks']), report)
             client.delete('/r1cs/' + upload['id'])
-        # Run the unmodified upstream entry point independently of our supervisor.
+        # Run the pinned artifact directly, independently of our supervisor.
         reader = self.file(data)
-        probe = self.linux('python3', '-c',
-            'import os,pathlib,subprocess,sys; p=pathlib.Path(sys.argv[1]).expanduser();'
-            'e=dict(os.environ,PLTSTDERR="error none@picus",SOLVER_PATH=str(p/"bin/cvc5"));'
-            'sys.exit(subprocess.call([str(p/"racket-8.16/bin/racket"),str(p/"Picus/picus.rkt"),'
-            '"--json","-","--truncate","off","--solver","cvc5","--timeout","5000",sys.argv[2]],env=e))',
-            self.engine.config.home, self.engine.linux_path(reader.path))
+        prefix = Path(self.engine.config.home).expanduser().resolve()
+        probe = subprocess.run(picus_command(prefix) +
+            ['--json', '-', '--truncate', 'off', '--solver', 'cvc5', '--timeout', '5000', str(reader.path)],
+            env=environment(prefix), capture_output=True, encoding='utf8', timeout=30,
+            **self.engine.process_options())
         self.assertEqual(probe.returncode, 8, probe.stdout + probe.stderr)
         self.assertIn('The circuit is properly constrained', probe.stdout)
 
@@ -178,13 +188,31 @@ class RealPicusTests(unittest.TestCase):
         flag = threading.Event()
         report = self.analyze(reader, cancelled=flag.is_set, progress=lambda _: flag.set())
         self.assertEqual(report['verdict'], 'cancelled', report)
-        process = subprocess.Popen(self.engine.command('run') + ['--file', self.engine.linux_path(reader.path)],
+        process = subprocess.Popen(self.engine.command('run') + ['--file', str(reader.path)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, errors = process.communicate(input=b'', timeout=20)  # parent pipe EOF
         self.assertEqual(process.returncode, 0, errors)
         result = [json.loads(line) for line in output.splitlines() if json.loads(line)['type'] == 'result'][0]['report']
         self.assertEqual(result['verdict'], 'cancelled', result)
         self.assertEqual(self.artifacts(), before)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows runtime isolation')
+    def test_without_path_or_external_racket_configuration(self):
+        # Absolute Python and runtime paths work even without any external tools.
+        with patch.dict(os.environ, PATH='', PLTUSERHOME=self.directory.name,
+                        PLTCOLLECTS='nonexistent', PLTCONFIGDIR='nonexistent'):
+            self.assertTrue(self.engine.status(refresh=True)['ready'])
+            report = self.analyze(self.file(r1cs(SQUARE, prime=BN254)))
+        self.assertEqual(report['verdict'], 'unsafe', report)
+        self.assertEqual(report['platform'], 'windows-native')
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows runtime installation')
+    def test_missing_runtime_is_reported_without_fallback(self):
+        engine = PicusEngine(PicusConfig(home=str(Path(self.directory.name) / 'missing')))
+        result = engine.status(refresh=True)
+        self.assertFalse(result['ready'])
+        self.assertEqual(result['platform'], 'windows-native')
+        self.assertIn('setup_picus.ps1', result['reason'])
 
 
 if __name__ == '__main__':

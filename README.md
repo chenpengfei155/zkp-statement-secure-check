@@ -291,24 +291,29 @@ constant, 2 public outputs, 0 public inputs and 4 private inputs. Switching file
 tabs preserves source edits and the R1CS page/coefficient mode. Uploading the same
 filename again replaces that tab's content.
 
-#### Install Picus once (Windows + WSL)
+#### Install Picus once (native Windows)
 
 The viewer needs no additional software. **Analyze** uses the original
 [Veridise/Picus](https://github.com/Veridise/Picus) at commit
-`138b151d3a388e5b6c040c163e0a1db04f2ceda6`, with Racket and cvc5 finite fields,
-in WSL's `Ubuntu-22.04`. From PowerShell at the project root:
+`138b151d3a388e5b6c040c163e0a1db04f2ceda6`, packaged with its Racket runtime and
+finite-field cvc5 for **64-bit Windows**. WSL, Ubuntu, a separate Racket installation,
+and a compiler are not required. Create the project's Python environment first,
+then run this command from PowerShell at the project root:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_picus.ps1
 ```
 
-The first installation downloads and builds dependencies and can take a while.
-The installation belongs to the WSL user at `~/.local/share/cirverify-picus`.
-Restart the web service after setup. Uploading/analyzing never downloads software.
-For another distribution, pass `-Distro` and set `CIRVERIFY_PICUS_DISTRO` before
-starting the web server.
-The installer uses a private Racket 8.16 runtime and runs real safe/unsafe smoke
-tests. Recheck offline with `.\.venv\Scripts\python.exe .\scripts\check_picus.py`.
+The installer verifies and extracts the included `vendor/picus/windows-x64/runtime.zip`
+to `.tools/picus` and runs real safe/unsafe checks. Installation and analysis are
+offline; no administrator rights are needed. Distribute the complete
+[`vendor/picus/windows-x64`](vendor/picus/windows-x64/README.md) folder with the project.
+Restart the web service after setup. Recheck with
+`.\.venv\Scripts\python.exe .\scripts\check_picus.py`.
+The existing six checks and result meanings are unchanged. Existing WSL installations
+are no longer used by the Windows web service. Remove an old `CIRVERIFY_PICUS_HOME`
+setting if it points to a Linux path. On native Linux, use `bash scripts/setup_picus.sh`;
+the Windows runtime bundle does not support macOS or ARM64 Python.
 
 Each analysis now reports six independent checks:
 
@@ -340,13 +345,13 @@ is recommended; incompatible optimized input counts require recompilation.
 Custom gates are unsupported. Source recovery, proof generation, CLI and folder
 R1CS analysis are outside this feature.
 
-Defaults: 5 seconds per solver query, 120 seconds per task, 4 GiB address-space
-limit per Linux child process, and one R1CS task at a time. After satisfiability,
+Defaults: 5 seconds per solver query, 120 seconds per task, 4 GiB per child process
+(committed memory on Windows; address space on Linux), and one R1CS task at a time. After satisfiability,
 output uniqueness receives half the remaining task time, reserving time for
 strong mode. Structural checks have work limits and display partial coverage
 when those limits are reached; they never treat an incomplete scan as passing.
 **Stop**, closing or
-replacing a file, and **Clear** cancel its process group. An unavailable Picus
+replacing a file, and **Clear** terminate its analysis process tree. An unavailable Picus
 installation does not affect Circom analysis or R1CS viewing.
 See [configuration and tests](web_ui/README.md#picus-configuration).
 

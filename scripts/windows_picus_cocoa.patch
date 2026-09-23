@@ -1,0 +1,124 @@
+--- a/src/AlgebraicCore/SignalWatcher.C
++++ b/src/AlgebraicCore/SignalWatcher.C
+@@ -23,6 +23,11 @@
+ 
+ namespace CoCoA
+ {
++#ifdef _WIN32
++  // Windows CRT has signal(), but does not implement POSIX sigaction().
++  struct sigaction { void (*previous)(int); };
++#endif
++
+ 
+   namespace // anonymous
+   {
+@@ -35,6 +40,15 @@
+   SignalWatcher::SignalWatcher(int sig, void FnPtr(int)):
+       mySig(sig)
+   {
++#ifdef _WIN32
++    myPrevSigactionPtr = new struct sigaction;
++    myPrevSigactionPtr->previous = std::signal(sig, FnPtr ? FnPtr : &SetSignalReceived);
++    if (myPrevSigactionPtr->previous == SIG_ERR)
++    {
++      delete myPrevSigactionPtr;
++      CoCoA_THROW_ERROR("Unable to set signal handler", "SignalWatcher ctor");
++    }
++#else
+     struct sigaction sa;
+     if (FnPtr == nullptr)
+       sa.sa_handler = &SetSignalReceived; // default CoCoA signal handler
+@@ -49,6 +63,7 @@
+       delete myPrevSigactionPtr;
+       CoCoA_THROW_ERROR("Unable to set signal handler", "SignalWatcher ctor");
+     }
++#endif
+   }
+ 
+ 
+@@ -65,7 +80,11 @@
+   void SignalWatcher::myDeactivate() noexcept
+   {
+     if (!IamActive()) return;
++#ifdef _WIN32
++    std::signal(mySig, myPrevSigactionPtr->previous);
++#else
+     sigaction(mySig, myPrevSigactionPtr, nullptr);
++#endif
+     delete myPrevSigactionPtr;
+     myPrevSigactionPtr = nullptr;
+   }
+--- a/src/AlgebraicCore/TmpFactorDir/jalloc.c
++++ b/src/AlgebraicCore/TmpFactorDir/jalloc.c
+@@ -47,7 +47,7 @@
+   if (CURRENT_MEM > PEAK_MEM) PEAK_MEM = CURRENT_MEM;
+   printf("%s at line %d of file %s\n", str, line, file);
+   /* casts to int below are to keep the compiler quiet */
+-  printf("ALLOC %lx (%ld bytes) (block is %lx-%lx) \tM=%dk F=%dk D=%dk MAX=%dk\n", (long)(ans+MARGIN), (long)sz, (long)ans, (long)(ans+(intsize+2*MARGIN)), TOTAL_MALLOCKED/1024, TOTAL_FREED/1024, CURRENT_MEM/1024, PEAK_MEM/1024);
++  printf("ALLOC %p (%zu bytes) (block is %p-%p) \tM=%dk F=%dk D=%dk MAX=%dk\n", (void*)(ans+MARGIN), sz, (void*)ans, (void*)(ans+(intsize+2*MARGIN)), TOTAL_MALLOCKED/1024, TOTAL_FREED/1024, CURRENT_MEM/1024, PEAK_MEM/1024);
+   return &ans[MARGIN];
+ }
+ 
+@@ -63,8 +63,8 @@
+ 
+ static void trouble(void* addr, void* block_lo, void* block_hi, int sz)
+ {
+-  printf("CHECKMARGINS: trouble at %lx for block %lx-%lx (size=%d)\n",
+-         (long)addr, (long)block_lo, (long)block_hi, sz);
++  printf("CHECKMARGINS: trouble at %p for block %p-%p (size=%d)\n",
++         (void*)addr, (void*)block_lo, (void*)block_hi, sz);
+ }
+ 
+ void CHECKMARGINS(void *ptr)
+@@ -76,12 +76,12 @@
+   sz = block[0];
+   if (sz < 0)
+   {
+-    printf("CHECKMARGINS: negative size at %lx\n", (long)ptr);
++    printf("CHECKMARGINS: negative size at %p\n", (void*)ptr);
+     return;
+   }
+   if (sz > 1000000)
+   {
+-    printf("CHECKMARGINS: suspiciously large block (sz=%d) at %lx\n", sz, (long)ptr);
++    printf("CHECKMARGINS: suspiciously large block (sz=%d) at %p\n", sz, (void*)ptr);
+     return;
+   }
+   for (i=1; i<MARGIN; i++)
+@@ -105,7 +105,7 @@
+   intsize = 1+sz/sizeof(int);
+   CHECKMARGINS(ptr);
+   for (i=0; i < intsize+2*MARGIN; i++) block[i] = 1122334455;
+-  printf("FREEING %lx (actually %lx-%lx)\n", (long)ptr, (long)block, (long)(block+(intsize+2*MARGIN)));
++  printf("FREEING %p (actually %p-%p)\n", (void*)ptr, (void*)block, (void*)(block+(intsize+2*MARGIN)));
+   TOTAL_FREED += sz;
+   CURRENT_MEM -= sz;
+   free(block);
+--- a/src/AlgebraicCore/TmpFactorDir/debug_malloc.c
++++ b/src/AlgebraicCore/TmpFactorDir/debug_malloc.c
+@@ -25,13 +25,13 @@
+   void *ans;
+ 
+   ans = malloc(sz);
+-  printf("ALLOC %lx (%ld bytes)\n", (long)ans, (long)sz);
++  printf("ALLOC %p (%zu bytes)\n", (void*)ans, sz);
+   return ans;
+ }
+ 
+ void debug_free(void *ptr, size_t sz)
+ {
+-  printf("FREEING %lx (%ld bytes)\n", (long)ptr, (long)sz);
++  printf("FREEING %p (%zu bytes)\n", (void*)ptr, sz);
+   free(ptr);
+ }
+ 
+@@ -40,7 +40,7 @@
+   void *ans;
+   ans = realloc(ptr, new_sz);
+   if (ans == ptr) return ans;
+-  printf("FREEING %lx (%ld bytes) realloc\n", (long)ptr, (long)old_sz);
+-  printf("ALLOC %lx (%ld bytes) realloc\n", (long)ans, (long)new_sz);
++  printf("FREEING %p (%zu bytes) realloc\n", (void*)ptr, old_sz);
++  printf("ALLOC %p (%zu bytes) realloc\n", (void*)ans, new_sz);
+   return ans;
+ }

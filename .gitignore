@@ -22,6 +22,8 @@ callgrind.out.*
 cmake-build-debug/*
 release/*
 build/*
+.tools/picus*/
+!vendor/picus/windows-x64/manifest.json
 build-dist/*
 dist/*
 doc/html/*

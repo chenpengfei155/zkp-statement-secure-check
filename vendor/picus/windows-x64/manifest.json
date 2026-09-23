@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "platform": "windows-x64",
+  "picus_revision": "138b151d3a388e5b6c040c163e0a1db04f2ceda6",
+  "cvc5_revision": "de62429fa7c03a46d5d75f9d78fc8888792a0798",
+  "archive": "runtime.zip",
+  "sha256": "fa7c228bb8750a5c3885aff6b1907f7a90acdb4a04dfceae4ad16865e43b0852",
+  "bytes": 50115143
+}

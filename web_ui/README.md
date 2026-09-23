@@ -84,7 +84,7 @@ It supports standard version 1 files, but not custom-gate extensions or `.sym`
 files. It does not restore source or generate proofs.
 Folder selection and the CLI remain Circom-only.
 
-Click **Analyze** after the [one-time Picus installation](../README.md#install-picus-once-windows--wsl).
+Click **Analyze** after the [one-time native Picus installation](../README.md#install-picus-once-native-windows).
 The report lists satisfiability, output uniqueness, all-signal uniqueness
 (including internal wires), unused wires, trivial constraints and duplicate
 constraints. Each has a separate pass, finding, unknown, error or skipped status.
@@ -117,37 +117,47 @@ Set these **server-side environment variables** before starting Flask:
 
 | Variable | Default |
 |---|---|
-| `CIRVERIFY_PICUS_DISTRO` | `Ubuntu-22.04` |
-| `CIRVERIFY_PICUS_HOME` | `~/.local/share/cirverify-picus` (Linux path) |
+| `CIRVERIFY_PICUS_HOME` | Windows: `<project>/.tools/picus`; Linux: `~/.local/share/cirverify-picus` |
 | `CIRVERIFY_PICUS_TIMEOUT` | `120` seconds per task |
 | `CIRVERIFY_PICUS_QUERY_TIMEOUT_MS` | `5000` milliseconds per solver query |
-| `CIRVERIFY_PICUS_MEMORY_MIB` | `4096` per Linux child process |
+| `CIRVERIFY_PICUS_MEMORY_MIB` | `4096` per child process (Windows committed memory; Linux address space) |
 
 The 120-second budget covers the entire six-check task. The standalone cvc5
 satisfiability query uses the same 5-second query limit (plus a two-second
 process watchdog allowance). Output uniqueness gets half the time remaining
-after that stage; strong mode gets the rest. Each stage uses a supervised
-process group so cancellation/timeout releases descendants and temporary files.
+after that stage; strong mode gets the rest. Each stage uses a Windows Job Object
+or Linux process group so cancellation/timeout releases descendants and temporary files.
 
 The fixed Picus revision is `138b151d3a388e5b6c040c163e0a1db04f2ceda6`;
 cvc5 is built at `de62429fa7c03a46d5d75f9d78fc8888792a0798` with CoCoA.
-The installer uses the official Racket 8.16 x86_64 distribution, with SHA-256
-verification. CoCoA's moved download URL is replaced by its current official
-archive URL, checked against the hash required by the pinned cvc5 source.
-The first installation needs network access and several GiB of disk space.
-The installer uses root only for Ubuntu packages; the tools live in the WSL
-user's directory. The backend uses argument arrays, a private temporary working
-directory, and a Linux process group. Stop, timeout, or loss of the supervisor's
-parent pipe kills/reaps the group; it never terminates the entire WSL distribution.
-No automatic fallback to the former finite R1CS checks is performed.
+On Windows x64, `scripts/setup_picus.ps1` installs the included standalone runtime
+offline into `.tools/picus`, with archive and per-file SHA-256 verification.
+Racket 8.16 and its packages are embedded, so users do not install Racket, cvc5,
+WSL or a compiler. Run `scripts/check_picus.py` to repeat the environment and
+real-circuit checks. Missing/damaged runtime files produce an installation error;
+there is no fallback to WSL or another checker. Circom and the R1CS viewer remain usable.
+See the [runtime package](../vendor/picus/windows-x64/README.md) for licenses,
+corresponding source archives and maintainer build instructions.
+
+Use `-HomeDirectory 'C:\Tools\CirVerify Picus'` to install elsewhere, and set
+`CIRVERIFY_PICUS_HOME` to that Windows directory before starting Flask. Old
+`CIRVERIFY_PICUS_DISTRO` settings are unused; remove Linux-valued home overrides.
+Stop the web service before updating a runtime currently in use. Failed self-checks
+leave the previous installation intact; successful updates retain a backup directory.
+
+The backend uses argument arrays and a private temporary directory. Windows
+children join a Job Object before any solver starts. Stop, timeout, parent-pipe
+closure or supervisor termination kills the analysis descendants, and the parent
+retains its concurrency lock and uploaded-file lease until cleanup completes.
+Linux installations still use the native `scripts/setup_picus.sh` workflow.
 
 API: `GET /r1cs/engine` returns readiness, pinned revision and a reason.
 `POST /r1cs/<id>/analyze` returns a `session_id`; it returns 503 when unavailable,
 422 for incompatible input counts, 404 for expired uploads and 409 when busy.
 `GET /progress/<session_id>` emits stage/elapsed-time updates and a `complete`
-event containing `kind`, `engine`, `revision`, `solver`, `scope`, `verdict`,
+event containing `kind`, `engine`, `revision`, `solver`, `platform`, `scope`, `verdict`,
 `reason`, `exit_code`, `elapsed_seconds`, `logs`, and optional `counterexample`.
-Verdicts are `safe`, `unsafe`, `unknown`, `error`, `cancelled`, `not_applicable`.
+Verdicts are `safe`, `unsafe`, `warning`, `unsatisfiable`, `unknown`, `error`, `cancelled`, `not_applicable`.
 `POST /stop/<session_id>` requests cancellation; the lock is retained until
 cleanup finishes. Upload leases prevent expiry during analysis.
 Circom `/analyze` retains its existing text format and behavior.
@@ -171,7 +181,7 @@ project environment's Python. With Node.js available, run
 display, file-switching, analysis lifecycle and asynchronous response checks. Node.js is needed
 only for these JavaScript development tests, not to run the viewer.
 
-After installing Picus, test the actual WSL engine (no mocks):
+After installing Picus, test the actual native engine (no mocks):
 
 ```powershell
 .\.venv\Scripts\python.exe .\scripts\check_picus.py

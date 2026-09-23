@@ -283,21 +283,27 @@ http://127.0.0.1:5000
 0 个公开输入和 4 个私有输入。切换文件标签页时会保留源码编辑内容，以及 R1CS 的
 当前页和系数显示模式；再次上传同名文件，会替换对应标签页的内容。
 
-#### 一次性安装 Picus（Windows + WSL）
+#### 一次性安装 Picus（Windows 原生运行，无需 WSL）
 
-R1CS 查看器不需要额外软件；**Analyze** 需要在 WSL 的 `Ubuntu-22.04` 中安装
-Picus、Racket 和带有限域支持的 cvc5。在项目根目录的 PowerShell 运行：
+R1CS 查看器不需要额外软件；**Analyze** 使用随项目提供的 Windows 原生 Picus
+运行包，包含 Racket 运行时及带有限域支持的 cvc5。使用者无需安装 WSL、Ubuntu、
+Racket 或编译器。先按前面的步骤创建项目 Python 环境，然后在项目根目录的
+PowerShell 运行（需要 64 位 Windows 和 64 位 Python）：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_picus.ps1
 ```
 
-安装会下载并编译依赖，首次可能需要较长时间。Picus 安装在 WSL 用户目录
-`~/.local/share/cirverify-picus`，固定原版提交 `138b151d3a388e5b6c040c163e0a1db04f2ceda6`。
-安装完成后重新启动网页服务；上传和分析时不会下载依赖。其他发行版可通过脚本的
-`-Distro` 参数指定，同时在启动网页前设置 `$env:CIRVERIFY_PICUS_DISTRO`。
-脚本使用独立的 Racket 8.16，并在结束前运行真实的正常、欠约束样例。
-以后可用 `.\.venv\Scripts\python.exe .\scripts\check_picus.py` 重新检查环境。
+脚本校验项目内的 `vendor/picus/windows-x64/runtime.zip`，解压到 `.tools/picus`，
+并运行真实的正常和欠约束样例。安装和分析均可离线完成，不需要管理员权限。
+把项目给其他人时，请一并保留完整的
+[`vendor/picus/windows-x64`](vendor/picus/windows-x64/README.md) 文件夹。
+Picus 固定原版提交 `138b151d3a388e5b6c040c163e0a1db04f2ceda6`，六项检查及结论含义不变。
+安装完成后重新启动网页服务；以后可用
+`.\.venv\Scripts\python.exe .\scripts\check_picus.py` 重新检查环境。
+Windows 网页服务不再调用旧的 WSL 安装。如果之前设置过指向 Linux 路径的
+`CIRVERIFY_PICUS_HOME`，请先移除该设置。原生 Linux 可使用 `bash scripts/setup_picus.sh`；
+此 Windows 运行包不支持 macOS 或 ARM64 Python。
 
 **R1CS Analyze 现在包含六项检查，分别显示结果：**
 
@@ -328,7 +334,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_picus.ps1
 若优化后的输入计数无法对应变量，需重新编译。本功能不还原源码、不生成证明、
 不支持自定义门扩展，命令行和文件夹分析仍只处理 Circom。
 
-默认单次求解查询 5 秒、整项分析 120 秒、Linux 子进程各限 4 GiB，同一时间一个任务。
+默认单次求解查询 5 秒、整项分析 120 秒、子进程各限 4 GiB，同一时间一个任务。
+Windows 限制提交内存，Linux 限制虚拟地址空间，两者统计口径不同。
 可满足性检查后，输出唯一性最多使用剩余任务时间的一半，给强模式保留时间。
 三项快速检查也有工作量上限；超限时明确显示部分扫描，不把未完成检查当作通过。
 一项超时不抹去其他已完成项目的结果；重复、恒真等提示可展开查看约束编号。

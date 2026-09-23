@@ -92,9 +92,9 @@ class LogTests(unittest.TestCase):
         self.assertEqual(len(report['logs'][0]), 1000)
         self.assertEqual(output.report(-15, 1, 'cancelled')['verdict'], 'cancelled')
 
-    def test_missing_wsl_is_an_install_error(self):
+    def test_missing_runtime_is_an_install_error(self):
         engine = PicusEngine()
-        with patch.object(engine, 'command', side_effect=FileNotFoundError('wsl.exe')):
+        with patch.object(engine, 'command', side_effect=FileNotFoundError('picus.exe')):
             result = engine.status()
         self.assertFalse(result['ready'])
         self.assertIn('setup_picus.ps1', result['reason'])

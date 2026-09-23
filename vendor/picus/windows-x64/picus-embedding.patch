@@ -1,0 +1,15 @@
+--- a/picus.rkt
++++ b/picus.rkt
+@@ -10,9 +10,9 @@
+          "picus/framework.rkt"
+          "picus/exit.rkt")
+ 
+-(define-runtime-path selector-path "picus/algorithms/selector.rkt")
+-(define-runtime-path reader-path "picus/reader.rkt")
+-(define-runtime-path solver-path "picus/solver.rkt")
++(define-runtime-module-path selector-path "picus/algorithms/selector.rkt")
++(define-runtime-module-path reader-path "picus/reader.rkt")
++(define-runtime-module-path solver-path "picus/solver.rkt")
+ 
+ ; =====================================
+ ; ======== commandline parsing ========
