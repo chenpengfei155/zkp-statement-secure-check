@@ -260,3 +260,52 @@ function renderR1CSReport(container, report) {
     if (report.logs_truncated) details.append(element('p', 'Only the latest 1,000 log entries are retained, with up to 1,000 characters per entry.'));
     container.append(details);
 }
+
+function renderCircomReport(container, report) {
+    const checks = Array.isArray(report.checks) ? report.checks : [];
+    const warningCount = Number.isFinite(report.warning_count)
+        ? report.warning_count : checks.reduce((total, check) => total + (check.count || 0), 0);
+    const verdict = report.verdict || (warningCount ? 'warning' : 'safe');
+    const hasWarnings = verdict === 'warning' || warningCount > 0;
+    const outcomeLevel = hasWarnings ? 'Warning' : 'Success';
+    const outcomeMessage = hasWarnings
+        ? 'Analysis completed with findings to review.'
+        : 'Analysis completed successfully.';
+    const element = (tag, text, className = '') => {
+        const node = document.createElement(tag);
+        node.textContent = text;
+        node.className = className;
+        return node;
+    };
+    const logLine = (level, message) => `[${level}]`.padEnd(13) + message;
+    const lines = [
+        logLine('Info', `File: ${report.filename || 'Not provided'}`),
+        logLine('Info', 'Engine: CirVerify | Source-level Circom checks.'),
+        logLine('Info', 'Dependency, constraint and data-flow checks.'),
+        '',
+    ];
+    for (const check of checks) {
+        const level = check.status === 'pass' ? 'Success' : 'Warning';
+        lines.push(logLine(level, `${check.name}: ${check.message}`));
+    }
+    lines.push('', logLine(outcomeLevel, outcomeMessage));
+    if (Number.isFinite(report.elapsed_seconds)) {
+        lines.push(logLine('Timeit', `Elapsed time: ${report.elapsed_seconds} s`));
+    }
+    lines.push('', '='.repeat(50), `Result: ${verdict}`);
+
+    container.className = `result ${hasWarnings ? 'warning' : 'success'} r1cs-report circom-report`;
+    container.replaceChildren();
+    container.style.display = 'block';
+    container.append(element('h3', 'Analysis Result'));
+    container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
+
+    for (const check of checks) {
+        if (!check.findings?.length) continue;
+        const details = element('details', '', 'picus-logs');
+        details.append(element('summary', `${check.name}: ${check.count} finding(s)`));
+        const findings = check.findings.map(item => `${item.location}: ${item.message}`);
+        details.append(element('pre', findings.join('\n')));
+        container.append(details);
+    }
+}

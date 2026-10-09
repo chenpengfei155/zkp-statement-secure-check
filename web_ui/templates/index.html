@@ -881,7 +881,9 @@
             stopBtn.style.display = 'inline-block';
             loading.style.display = 'block';
             result.style.display = 'none';
-            progressContainer.style.display = 'block';
+            // Circom analysis reports only its final status. R1CS analysis
+            // keeps the stage indicator because it can run external checks.
+            progressContainer.style.display = isR1CS ? 'block' : 'none';
             progressBar.style.width = '0%';
             progressBar.textContent = '0%';
             progressText.textContent = isR1CS ? 'Checking Picus environment…' : 'Starting analysis...';
@@ -904,7 +906,10 @@
                 const response = await fetch(isR1CS ? `/r1cs/${sourceState.id}/analyze` : '/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(isR1CS ? {} : { code })
+                    body: JSON.stringify(isR1CS ? {} : {
+                        code,
+                        filename: sourceState?.metadata?.filename || sourceState?.path || undefined
+                    })
                 });
                 
                 const data = await response.json();
@@ -935,23 +940,8 @@
                             return;
                         }
                         
-                        // Update progress bar
-                        if (progressData.percent !== undefined) {
-                            progressBar.style.width = progressData.percent + '%';
-                            progressBar.textContent = progressData.percent + '%';
-                            progressText.textContent = `${progressData.current}/${progressData.total} ${progressData.time || ''}`;
-                        } else if (progressData.message) {
-                            progressText.textContent = progressData.message;
-                        }
-                        
-                        // Add to log
-                        if (message.raw) {
-                            const logLine = document.createElement('div');
-                            logLine.className = 'progress-log-line';
-                            logLine.textContent = message.raw.trim();
-                            progressLog.appendChild(logLine);
-                            progressLog.scrollTop = progressLog.scrollHeight;
-                        }
+                        // Circom internals are intentionally not rendered.
+                        return;
                     } else if (message.type === 'complete') {
                         if (!isR1CS) {
                             progressBar.style.width = '100%';
@@ -959,8 +949,14 @@
                         }
                         progressText.textContent = 'Analysis completed!';
                         cleanupAnalysis();
-                        if (isR1CS) publish('r1cs', {...message.result, filename: sourceState.metadata.filename});
-                        else publish('success', message.result);
+                        if (isR1CS) {
+                            publish('r1cs', {...message.result, filename: sourceState.metadata.filename});
+                        } else if (message.report && message.report.kind === 'circom') {
+                            publish('circom', {...message.report,
+                                filename: sourceState?.metadata?.filename || sourceState?.path || message.report.filename});
+                        } else {
+                            publish('success', message.result);
+                        }
                     } else if (message.type === 'cancelled') {
                         progressText.textContent = 'Analysis cancelled';
                         progressBar.style.background = '#e53e3e';
@@ -1079,36 +1075,40 @@
         // Show folder analysis result
         function showFolderResult(data) {
             const result = document.getElementById('result');
-            result.className = 'result success';
-            
-            let html = '<h3>📂 Folder Analysis Results</h3>';
+            const resultStyle = data.fail_count === 0 ? 'success'
+                : data.success_count === 0 ? 'error' : 'warning';
+            result.className = 'result ' + resultStyle;
+
+            const successful = data.results.filter(fileResult => fileResult.success);
+            const failed = data.results.filter(fileResult => !fileResult.success);
+            let html = '<h3>Folder Analysis Results</h3>';
             html += `<div class="progress-info">`;
             html += `Total files: ${data.total_files} | `;
-            html += `✅ Success: ${data.success_count} | `;
-            html += `❌ Failed: ${data.fail_count}`;
+            html += `Success: ${data.success_count} | `;
+            html += `Failed: ${data.fail_count}`;
             html += `</div>`;
-            
-            data.results.forEach((fileResult, index) => {
-                const resultClass = fileResult.success ? 'success' : 'error';
-                html += `<div class="folder-result">`;
-                html += `<div class="file-result ${resultClass}">`;
-                html += `<div class="file-result-header">`;
-                html += `[${fileResult.index}/${fileResult.total}] ${escapeHtml(fileResult.file)}`;
-                html += `</div>`;
-                
-                if (fileResult.success) {
-                    html += `<pre style="margin: 0; padding: 10px; background: #f7fafc; border-radius: 3px; font-size: 12px;">${escapeHtml(fileResult.result)}</pre>`;
-                } else {
-                    html += `<div style="color: #c53030; padding: 10px; background: #fff5f5; border-radius: 3px;">❌ ${escapeHtml(fileResult.error)}</div>`;
-                }
-                html += `</div>`;
-                html += `</div>`;
-            });
-            
+
+            if (successful.length) {
+                html += '<div class="file-result success"><div class="file-result-header">Successful projects</div><ul>';
+                successful.forEach(fileResult => {
+                    const warnings = Number.isFinite(fileResult.warning_count)
+                        ? ` (${fileResult.warning_count} warnings)` : '';
+                    html += `<li>${escapeHtml(fileResult.file)}${warnings}</li>`;
+                });
+                html += '</ul></div>';
+            }
+            if (failed.length) {
+                html += '<div class="file-result error"><div class="file-result-header">Failed projects</div><ul>';
+                failed.forEach(fileResult => {
+                    html += `<li>${escapeHtml(fileResult.file)}: ${escapeHtml(fileResult.error || 'Analysis failed')}</li>`;
+                });
+                html += '</ul></div>';
+            }
+
             result.innerHTML = html;
             result.style.display = 'block';
         }
-        
+
         // Escape HTML
         function escapeHtml(text) {
             const div = document.createElement('div');
@@ -1121,6 +1121,10 @@
             const result = document.getElementById('result');
             if (type === 'r1cs') {
                 renderR1CSReport(result, message);
+                return;
+            }
+            if (type === 'circom') {
+                renderCircomReport(result, message);
                 return;
             }
             result.className = 'result ' + type;

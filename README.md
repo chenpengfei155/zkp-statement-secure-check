@@ -238,9 +238,11 @@ For your first analysis:
 1. Choose **Single Assignment Issue** from the **Select Example** dropdown.
 2. The example appears in the editor. Alternatively, use **Upload File** to open
    the project's `demo.circom` file.
-3. Click **Analyze** and view the progress and result areas.
-4. Read the messages following `[Warning]`. This example produces two warnings
-   about the computation and constraints for `out`.
+3. Click **Analyze** and review the check-by-check result. Each detector is
+   marked as successful or warning, and warning rows can be expanded for their
+   source locations and messages.
+4. This example produces two warnings about the computation and constraints for
+   `out`; use the CLI `--json` option when you need the full machine-readable report.
 5. Edit the code and click **Analyze** again as needed. Browser edits are not
    automatically saved back to the original file.
 
@@ -261,9 +263,10 @@ reference other files, the submission may lack dependencies or lose the original
 relative paths. In that case, use the [CLI](#usage) on the original `.circom` file
 and preserve its directory structure and dependencies.
 
-`Total warnings: 2` means two warnings were found. Reaching `100%` or showing an
-analysis-complete message means the checks finished. Read the warning messages;
-even an analysis with no warnings does not guarantee that the circuit is secure.
+`Total warnings: 2` means two warnings were found. The web result lists each
+detector and its findings, while the CLI `--json` option provides the full
+machine-readable report. Even an analysis with no warnings does not guarantee
+that the circuit is secure.
 
 The web interface currently has no JSON report download button. To save a
 Circom source report, follow the [CLI examples](#example-usage) and use `--json`.

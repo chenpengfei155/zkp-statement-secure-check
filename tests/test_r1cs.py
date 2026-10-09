@@ -179,7 +179,12 @@ class WebTests(unittest.TestCase):
         events = [json.loads(line[6:]) for line in response.get_data(as_text=True).splitlines() if line.startswith('data: ')]
         self.assertFalse([e for e in events if e['type'] == 'error'])
         result = next(e['result'] for e in events if e['type'] == 'complete')
+        report = next(e['report'] for e in events if e['type'] == 'complete')
         self.assertIn('Total warnings: 0', result)
+        self.assertNotIn('[Info]', result)
+        self.assertNotIn('%|', result)
+        self.assertEqual(report['kind'], 'circom')
+        self.assertTrue(all(check['status'] == 'pass' for check in report['checks']))
         self.assertNotIn(session_id, web.progress_queues)
 
     def test_source_error_and_invalid_requests(self):
@@ -199,6 +204,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json['success_count'], 1)
         self.assertIn('Total warnings: 0', response.json['results'][0]['result'])
+        self.assertEqual(response.json['results'][0]['warning_count'], 0)
         picus.assert_not_called()
         self.assertEqual(set((ROOT / 'benchmarks').glob('cirverify_folder_*')), before)
 

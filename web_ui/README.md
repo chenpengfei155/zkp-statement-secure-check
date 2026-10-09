@@ -160,7 +160,10 @@ event containing `kind`, `engine`, `revision`, `solver`, `platform`, `scope`, `v
 Verdicts are `safe`, `unsafe`, `warning`, `unsatisfiable`, `unknown`, `error`, `cancelled`, `not_applicable`.
 `POST /stop/<session_id>` requests cancellation; the lock is retained until
 cleanup finishes. Upload leases prevent expiry during analysis.
-Circom `/analyze` retains its existing text format and behavior.
+Circom `/analyze` returns a check-by-check summary. Each detector is marked
+`[Success]` or `[Warning]`; warning findings can be expanded for their source
+locations and messages. Parser, detector and tqdm output is kept out of the
+browser result.
 
 ## Known Limitations
 

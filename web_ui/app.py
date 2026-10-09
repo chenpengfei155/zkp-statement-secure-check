@@ -74,7 +74,13 @@ def upload_too_large(error):
     return jsonify({'error': 'Upload exceeds the 100 MiB request limit (including form data).'}), 413
 
 class ProgressCapture:
-    """Capture stdout/stderr and send to queue for SSE."""
+    """Capture analyzer output without exposing implementation logs in the UI.
+
+    Circom's parser and detector use stdout for diagnostic messages and tqdm
+    progress bars.  The web result is intentionally a structured check summary,
+    so the captured text stays available to the caller but is not streamed to
+    the browser as user-facing progress.
+    """
     def __init__(self, queue_obj):
         self.queue = queue_obj
         self.old_stdout = sys.stdout
@@ -83,12 +89,6 @@ class ProgressCapture:
         
     def write(self, text):
         self.buffer.write(text)
-        # Send to queue for real-time updates
-        if text.strip():
-            try:
-                self.queue.put_nowait(('output', text))
-            except queue.Full:
-                pass
         return len(text)
     
     def flush(self):
@@ -180,6 +180,7 @@ def analyze():
     if not isinstance(data, dict) or not isinstance(data.get('code'), str) or not data['code'].strip():
         return jsonify({'error': 'Please provide Circom source code.'}), 400
     code = data['code'].strip()
+    filename = data.get('filename') if isinstance(data.get('filename'), str) else None
     session_id = str(uuid.uuid4())
     progress_queue = queue.Queue()
     progress_queues[session_id] = progress_queue
@@ -229,6 +230,7 @@ def analyze():
                 if stop_flags[session_id].is_set():
                     progress_queue.put(('cancelled', 'Analysis cancelled by user'))
                     return
+                started = time.monotonic()
                 graphs, reports = detect(temp_path)
                 if stop_flags[session_id].is_set():
                     progress_queue.put(('cancelled', 'Analysis cancelled by user'))
@@ -237,7 +239,12 @@ def analyze():
                     progress_queue.put(('error', 'Analysis failed. Check if the Circom code is valid.'))
                     return
                 print_reports(graphs, reports)
-                progress_queue.put(('complete', capture.getvalue()))
+                source_report = build_source_report(
+                    graphs, reports, time.monotonic() - started, filename=filename)
+                progress_queue.put(('complete', {
+                    'summary': summarize_source_analysis(source_report),
+                    'report': source_report,
+                }))
         except Exception as e:
             if not stop_flags.get(session_id, threading.Event()).is_set():
                 progress_queue.put(('error', str(e)))
@@ -310,7 +317,15 @@ def progress_stream(session_id):
                     yield f"data: {json.dumps({'type': 'cancelled', 'message': content})}\n\n"
                 elif msg_type == 'complete':
                     terminal_consumed = True
-                    yield f"data: {json.dumps({'type': 'complete', 'result': content})}\n\n"
+                    if isinstance(content, dict) and 'report' in content:
+                        payload = {
+                            'type': 'complete',
+                            'result': content.get('summary', ''),
+                            'report': content['report'],
+                        }
+                    else:
+                        payload = {'type': 'complete', 'result': content}
+                    yield f"data: {json.dumps(payload)}\n\n"
                 elif msg_type == 'output':
                     # Parse progress bar information
                     progress_data = parse_progress(content)
@@ -356,6 +371,77 @@ def parse_progress(text):
         }
     
     return {'raw': text.strip()}
+
+
+SOURCE_CHECKS = (
+    ('unconstrained_output', 'Unconstrained Output'),
+    ('unconstrained component input', 'Unconstrained Component Input'),
+    ('data flow constraint discrepancy', 'Data Flow / Constraint Discrepancy'),
+    ('unused component output', 'Unused Component Output'),
+    ('unused signal', 'Unused Signal'),
+    ('type mismatch', 'Type Mismatch'),
+    ('assignment missue', 'Assignment Misuse'),
+    ('divide by zero', 'Divide by Zero'),
+    ('nondeterministic data flow', 'Nondeterministic Data Flow'),
+)
+
+
+def _source_finding(report, filename=None):
+    location = report.location
+    start = getattr(location, 'start', None)
+    line = getattr(start, 'line', None)
+    column = getattr(start, 'column', None)
+    path = filename or getattr(location, 'path', '')
+    if line is not None and column is not None:
+        display_location = f'{path}:{line}:{column}'
+    else:
+        display_location = path
+    return {'location': display_location, 'message': report.message}
+
+
+def build_source_report(graphs, reports, elapsed_seconds=None, filename=None):
+    """Build the check-by-check report rendered by the Circom result panel."""
+    checks = []
+    for check_id, name in SOURCE_CHECKS:
+        findings = []
+        seen = set()
+        for graph in graphs.values():
+            for report in reports.get(graph.name, {}).get(check_id, []):
+                finding = _source_finding(report, filename)
+                key = (finding['location'], finding['message'])
+                if key not in seen:
+                    seen.add(key)
+                    findings.append(finding)
+        count = len(findings)
+        checks.append({
+            'id': check_id,
+            'name': name,
+            'status': 'warning' if count else 'pass',
+            'count': count,
+            'message': f'Found {count} finding(s).' if count else 'No findings.',
+            'findings': findings,
+        })
+
+    warning_count = sum(check['count'] for check in checks)
+    report = {
+        'kind': 'circom',
+        'filename': filename,
+        'checks': checks,
+        'warning_count': warning_count,
+        'verdict': 'warning' if warning_count else 'safe',
+    }
+    if elapsed_seconds is not None:
+        report['elapsed_seconds'] = round(elapsed_seconds, 2)
+    return report
+
+
+def summarize_source_analysis(report):
+    """Return a backwards-compatible compact summary for the API client."""
+    if report['warning_count']:
+        status = 'Analysis completed with findings to review.'
+    else:
+        status = 'Analysis completed successfully.'
+    return f"{status}\nTotal warnings: {report['warning_count']}"
 
 
 @app.route('/upload', methods=['POST'])
@@ -511,16 +597,22 @@ def analyze_single_file(file_path, project_root):
     """Analyze a single Circom file and return the result."""
     try:
         with analysis_lock:
+            started = time.monotonic()
             graphs, reports = detect(file_path)
             if not graphs or not reports:
                 return {'success': False, 'error': 'Analysis failed. Check if the Circom code is valid.'}
-            with ProgressCapture(queue.Queue()) as capture:
+            with ProgressCapture(queue.Queue()):
                 print_reports(graphs, reports)
-                output = capture.getvalue()
+            source_report = build_source_report(
+                graphs, reports, time.monotonic() - started,
+                filename=os.path.basename(file_path))
+            summary = summarize_source_analysis(source_report)
         
         return {
             'success': True,
-            'result': output if output else 'No issues detected! ✅'
+            'warning_count': source_report['warning_count'],
+            'result': summary,
+            'report': source_report,
         }
     except Exception as e:
         return {'success': False, 'error': str(e)}

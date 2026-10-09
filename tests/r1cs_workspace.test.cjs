@@ -233,9 +233,26 @@ test('Circom Analyze still sends edited source and displays its text report', as
     h.editor.setValue('edited');
     const request = await startAnalysis(h);
     assert.equal(request.url, '/analyze');
-    assert.deepEqual(JSON.parse(request.options.body), {code: 'edited'});
+    assert.deepEqual(JSON.parse(request.options.body), {code: 'edited', filename: 'source.circom'});
     h.streams.at(-1).emit({type: 'complete', result: 'Total warnings: 2'});
     assert.match(h.document.getElementById('result').innerHTML, /Total warnings: 2/);
+});
+
+test('Circom reports list successful and warning checks with expandable findings', () => {
+    const h = harness();
+    h.run(`renderCircomReport(document.getElementById('result'), ${JSON.stringify({
+        kind: 'circom', filename: 'demo.circom', verdict: 'warning', warning_count: 1,
+        checks: [
+            {name: 'Unused Signal', status: 'pass', count: 0, message: 'No findings.', findings: []},
+            {name: 'Assignment Misuse', status: 'warning', count: 1, message: 'Found 1 finding(s).',
+                findings: [{location: 'demo.circom:5:4', message: 'Constraint does not match dataflow.'}]},
+        ],
+    })})`);
+    const result = h.document.getElementById('result');
+    assert.match(result.className, /warning/);
+    assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Success\].*Unused Signal/);
+    assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Warning\].*Assignment Misuse/);
+    assert.match(result.querySelector('summary').textContent, /Assignment Misuse: 1 finding/);
 });
 
 test('Picus counterexamples preserve decimal strings, highlight differences and never fill missing values', async () => {
