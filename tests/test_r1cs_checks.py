@@ -31,29 +31,24 @@ class StructuralTests(unittest.TestCase):
         self.assertIn('(_ FiniteField 17)', query)
         self.assertIn('(check-sat)', query)
 
-    def test_modular_cancellation_and_duplicate_equations(self):
+    def test_modular_cancellation(self):
         checks, _ = self.scan([
             ({1: 16}, {0: 16}, {1: 1}),  # -w1 * -1 - w1 = 0 (mod 17)
             ({1: 1, 2: 1}, {0: 1}, {2: 1}),
-            ({0: 1}, {1: 1}, {}),  # same polynomial as row 1
             ({1: 1}, {0: 1}, {0: 1}),  # w1 - 1 differs
         ])
         self.assertEqual(checks['trivial_constraints']['findings'], [{'constraint': 0}])
-        self.assertEqual(checks['duplicate_constraints']['findings'], [{'constraint': 2, 'duplicate_of': 1}])
 
     def test_budget_never_claims_complete_or_invents_unused_wires(self):
         checks, _ = self.scan([({1: 1, 2: 1}, {2: 1, 3: 1}, {})], row_limit=0)
         self.assertTrue(all(item['status'] == 'unknown' for item in checks.values()))
         self.assertEqual(checks['unused_wires']['count'], 0)
-        checks, _ = self.scan([({1: 1}, {0: 1}, {})], index_limit=0)
-        self.assertEqual(checks['duplicate_constraints']['status'], 'unknown')
 
     def test_finding_display_cap_preserves_counts(self):
         checks, _ = self.scan([({}, {}, {})] * 105)
         self.assertEqual(checks['trivial_constraints']['count'], 105)
         self.assertEqual(len(checks['trivial_constraints']['findings']), 100)
         self.assertTrue(checks['trivial_constraints']['truncated'])
-        self.assertEqual(checks['duplicate_constraints']['count'], 104)
 
     def test_cancel_stops_query_preparation(self):
         def cancelled():

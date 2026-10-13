@@ -2,7 +2,7 @@
 
 [English project guide](../README.md) | [简体中文项目说明](../README.zh-CN.md)
 
-A web interface for analyzing Circom source, viewing binary R1CS constraints and running six R1CS checks with Picus, cvc5 and structural analysis.
+A web interface for analyzing Circom source, viewing binary R1CS constraints and running five R1CS checks with Picus, cvc5 and structural analysis.
 
 ## Features
 
@@ -63,7 +63,7 @@ The web interface has no JSON download button. Use the
 ### R1CS Constraint Viewer and Analysis
 
 Use **Upload File** to open `demo1.r1cs`. The viewer opens automatically and offers
-**Analyze** for six R1CS checks. Its compact overview shows the file size, constraint/variable
+**Analyze** for five R1CS checks. Its compact overview shows the file size, constraint/variable
 counts and public/private input and public output counts. Expand **Field modulus
 & reading guide** for the full modulus and explanation. The **← / →** buttons
 page through 50 equations at a time in the form `A × B − C = 0`.
@@ -86,8 +86,8 @@ Folder selection and the CLI remain Circom-only.
 
 Click **Analyze** after the [one-time native Picus installation](../README.md#install-picus-once-native-windows).
 The report lists satisfiability, output uniqueness, all-signal uniqueness
-(including internal wires), unused wires, trivial constraints and duplicate
-constraints. Each has a separate pass, finding, unknown, error or skipped status.
+(including internal wires), unused wires and trivial constraints. Each has a
+separate pass, finding, unknown, error or skipped status.
 It uses Circom's **Analysis Result** heading, light result panel and English
 `[Info]`, `[Success]` or `[Warning]` text output. Counterexamples appear below the
 summary; **Run details and raw logs** retains the original Picus output.
@@ -99,15 +99,14 @@ run without a green overall pass. Counterexamples show wire numbers and two
 alternative outputs/internal values, with decimal strings preserving precision.
 Structural and strong-mode findings produce an advisory `warning`, whereas
 non-unique outputs produce `unsafe`, and inconsistent constraints produce
-`unsatisfiable`. `safe` requires all six checks to pass; `unknown` never counts
+`unsatisfiable`. `safe` requires all five checks to pass; `unknown` never counts
 as passing. These properties do not establish intended business functionality.
 
 Structural checks expand A*B-C modulo the file's modulus, eliminating zero
-coefficients and treating w0 as 1. Duplicate detection compares identical
-normalized polynomials (not all scalar multiples or implied constraints).
+coefficients and treating w0 as 1.
 Expansion is capped at 20,000 term operations per row and 1,000,000 per file;
-the duplicate index holds at most 100,000 unique fingerprints. Incomplete scans
-are marked partial/unknown, with at most 100 displayed findings per check.
+incomplete scans are marked partial/unknown, with at most 100 displayed findings
+per check.
 Large rows use conservative wire occurrence tracking to avoid false unused-wire
 findings. Counts include all findings discovered within the scan budget.
 
@@ -122,7 +121,7 @@ Set these **server-side environment variables** before starting Flask:
 | `CIRVERIFY_PICUS_QUERY_TIMEOUT_MS` | `5000` milliseconds per solver query |
 | `CIRVERIFY_PICUS_MEMORY_MIB` | `4096` per child process (Windows committed memory; Linux address space) |
 
-The 120-second budget covers the entire six-check task. The standalone cvc5
+The 120-second budget covers the entire five-check task. The standalone cvc5
 satisfiability query uses the same 5-second query limit (plus a two-second
 process watchdog allowance). Output uniqueness gets half the time remaining
 after that stage; strong mode gets the rest. Each stage uses a Windows Job Object

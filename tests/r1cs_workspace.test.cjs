@@ -158,8 +158,8 @@ function reportFixture() {
             {id: 'satisfiability', name: 'Constraint Satisfiability', status: 'pass', message: 'At least one assignment satisfies all constraints.'},
             {id: 'output_uniqueness', name: 'Output Uniqueness', status: 'pass', message: 'Output uniqueness verified.'},
             {id: 'signal_uniqueness', name: 'All-Signal Uniqueness', status: 'pass', message: 'All signals are uniquely determined by the inputs.'},
-            ...['Unused Wires', 'Trivial Constraints', 'Duplicate Constraints'].map((name, index) =>
-                ({id: ['unused_wires', 'trivial_constraints', 'duplicate_constraints'][index], name, status: 'pass', message: 'No findings.'}))
+            ...['Unused Wires', 'Trivial Constraints'].map((name, index) =>
+                ({id: ['unused_wires', 'trivial_constraints'][index], name, status: 'pass', message: 'No findings.'}))
         ]};
 }
 
@@ -190,8 +190,12 @@ test('R1CS Analyze dispatches by id and preserves reports across tab switches wi
     assert.equal(result.className, 'result success r1cs-report');
     assert.equal(result.querySelectorAll('.coverage-unavailable').length, 0);
     assert.equal(result.querySelector('h3').textContent, 'Analysis Result');
+    const checkCards = result.querySelectorAll('.r1cs-check-card');
+    assert.equal(checkCards.length, 5);
+    assert.ok(checkCards.some(card => card.className.includes('is-success')));
+    assert.equal(checkCards[0].querySelector('.r1cs-check-status').textContent, 'Success');
     assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Success\]\s+Output Uniqueness: Output uniqueness verified/);
-    assert.match(result.querySelector('.r1cs-result-output').textContent, /All six checks passed/);
+    assert.match(result.querySelector('.r1cs-result-output').textContent, /All five checks passed/);
     assert.ok(stream.closed);
     assert.equal(h.run('analysisBusy'), false);
     assert.equal(h.editor.getValue(), 'edited source');
@@ -244,15 +248,18 @@ test('Circom reports list successful and warning checks with expandable findings
         kind: 'circom', filename: 'demo.circom', verdict: 'warning', warning_count: 1,
         checks: [
             {name: 'Unused Signal', status: 'pass', count: 0, message: 'No findings.', findings: []},
-            {name: 'Assignment Misuse', status: 'warning', count: 1, message: 'Found 1 finding(s).',
+            {name: 'Data Flow / Constraint Discrepancy', status: 'warning', count: 1, message: 'Found 1 finding(s).',
                 findings: [{location: 'demo.circom:5:4', message: 'Constraint does not match dataflow.'}]},
         ],
     })})`);
     const result = h.document.getElementById('result');
     assert.match(result.className, /warning/);
     assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Success\].*Unused Signal/);
-    assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Warning\].*Assignment Misuse/);
-    assert.match(result.querySelector('summary').textContent, /Assignment Misuse: 1 finding/);
+    assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Warning\].*Data Flow \/ Constraint Discrepancy/);
+    const checkCards = result.querySelectorAll('.r1cs-check-card');
+    assert.equal(checkCards.filter(card => card.className.includes('is-warning')).length, 1);
+    assert.equal(checkCards[1].querySelector('.r1cs-check-status').textContent, 'Warning');
+    assert.match(result.querySelector('summary').textContent, /Data Flow \/ Constraint Discrepancy: 1 finding/);
 });
 
 test('Picus counterexamples preserve decimal strings, highlight differences and never fill missing values', async () => {
@@ -286,15 +293,15 @@ test('closing an R1CS tab before the start response cancels its late session', a
     assert.equal(h.run('analysisBusy'), false);
 });
 
-test('six-check report shows internal counterexamples and structural findings without an unsafe headline', () => {
+test('five-check report shows internal counterexamples and structural findings without an unsafe headline', () => {
     const h = harness();
     const report = reportFixture();
     report.verdict = 'warning';
     Object.assign(report.checks[2], {status: 'warning', verdict: 'unsafe', message: 'Internal values are not unique.',
         counterexample: {inputs: [], outputs: [{wire: 1, first: '1', second: '1'}],
             internal: [{wire: 2, first: '1', second: '16'}]}});
-    Object.assign(report.checks[5], {status: 'warning', message: 'Found 1 duplicate.', count: 1, complete: true,
-        findings: [{constraint: 2, duplicate_of: 0}]});
+    Object.assign(report.checks[4], {status: 'warning', message: 'Found 1 trivial constraint.', count: 1, complete: true,
+        findings: [{constraint: 2}]});
     h.context.fixture = report;
     h.run("renderR1CSReport(document.getElementById('result'), fixture)");
     const result = h.document.getElementById('result');
@@ -302,10 +309,10 @@ test('six-check report shows internal counterexamples and structural findings wi
     assert.equal(result.className, 'result warning r1cs-report');
     assert.match(text, /Output Uniqueness: Output uniqueness verified/);
     assert.match(text, /\[Warning\]\s+All-Signal Uniqueness/);
-    assert.doesNotMatch(text, /All six checks passed/);
+    assert.doesNotMatch(text, /All five checks passed/);
     assert.ok(result.querySelectorAll('th').some(node => node.textContent === 'Internal wire'));
     assert.equal(result.querySelectorAll('.picus-difference').length, 1);
-    assert.ok(result.querySelectorAll('pre').some(node => node.textContent.includes('Constraint #3 repeats #1')));
+    assert.ok(result.querySelectorAll('pre').some(node => node.textContent.includes('Constraint #3 simplifies to 0 = 0')));
 });
 
 test('unknown and unsatisfiable reports keep each check status and never show a success summary', () => {
@@ -321,7 +328,7 @@ test('unknown and unsatisfiable reports keep each check status and never show a 
         h.run("renderR1CSReport(document.getElementById('result'), fixture)");
         const text = h.document.getElementById('result').querySelector('.r1cs-result-output').textContent;
         assert.match(text, /\[Skipped\]\s+Output Uniqueness/);
-        assert.doesNotMatch(text, /All six checks passed/);
+        assert.doesNotMatch(text, /All five checks passed/);
         assert.match(text, verdict === 'unknown' ? /\[Unknown\]/ : /The constraints have no solution/);
     }
 });

@@ -16,6 +16,40 @@ function formatR1CSCombination(terms, prime, signed = true) {
     return parts.join('') || '0';
 }
 
+function appendCheckSummary(container, checks) {
+    if (!Array.isArray(checks) || !checks.length) return;
+    const summary = document.createElement('div');
+    summary.className = 'r1cs-check-summary';
+    const statusInfo = check => {
+        const {id, status} = check;
+        if (status === 'pass') return ['success', 'Success'];
+        if (status === 'warning') return ['warning', 'Warning'];
+        if (status === 'fail') return [id === 'satisfiability' ? 'error' : 'warning', 'Warning'];
+        if (status === 'error') return ['error', 'Error'];
+        if (status === 'unknown') return ['unknown', 'Unknown'];
+        if (status === 'skipped') return ['skipped', 'Skipped'];
+        if (status === 'cancelled') return ['warning', 'Cancelled'];
+        return ['error', 'Error'];
+    };
+    for (const check of checks) {
+        const [style, label] = statusInfo(check);
+        const card = document.createElement('div');
+        card.className = `r1cs-check-card is-${style}`;
+        const badge = document.createElement('span');
+        badge.className = 'r1cs-check-status';
+        badge.textContent = label;
+        const name = document.createElement('div');
+        name.className = 'r1cs-check-name';
+        name.textContent = check.name || check.id || 'Check';
+        const message = document.createElement('div');
+        message.className = 'r1cs-check-message';
+        message.textContent = check.message || 'No additional details.';
+        card.append(badge, name, message);
+        summary.append(card);
+    }
+    container.append(summary);
+}
+
 class R1CSViewer {
     constructor(panel) {
         this.panel = panel;
@@ -150,7 +184,7 @@ function renderR1CSReport(container, report) {
     };
     const checks = Array.isArray(report.checks) ? report.checks : null;
     if (checks) {
-        outcomes.safe.message = 'All six checks passed.';
+        outcomes.safe.message = 'All five checks passed.';
         outcomes.unknown.message = 'Some checks could not reach a conclusion.';
         outcomes.not_applicable.message = 'No public outputs; see the remaining check results below.';
     }
@@ -199,13 +233,13 @@ function renderR1CSReport(container, report) {
     }
     lines.push('', '='.repeat(50), `Result: ${verdict}`);
     container.append(element('h3', 'Analysis Result'));
+    appendCheckSummary(container, checks);
     container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
     for (const check of checks || []) {
         if (!check.findings?.length) continue;
         const findingDetails = element('details', '', 'picus-logs');
         findingDetails.append(element('summary', `${check.name}: ${check.count} finding(s)`));
         const list = check.findings.map(item => item.wire != null ? `w${item.wire}`
-            : item.duplicate_of != null ? `Constraint #${item.constraint + 1} repeats #${item.duplicate_of + 1}`
             : `Constraint #${item.constraint + 1} simplifies to 0 = 0`);
         findingDetails.append(element('pre', list.join('\n')));
         if (check.truncated) findingDetails.append(element('p', 'Showing the first 100 findings.'));
@@ -298,6 +332,7 @@ function renderCircomReport(container, report) {
     container.replaceChildren();
     container.style.display = 'block';
     container.append(element('h3', 'Analysis Result'));
+    appendCheckSummary(container, checks);
     container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
 
     for (const check of checks) {

@@ -123,25 +123,18 @@ CIRVERIFY_TO_ZKAP = {
     "unconstrained component input": "Unconstrained Comp. Input",
     "data flow constraint discrepancy": "Dataflow-constraint Discrepancy",
     "unused component output": "Unused Comp. Output",
-    "unused signal": "Unused Circ. Signal",
-    "divide by zero": "Division-By-Zero",
-    "nondeterministic data flow": "Non-Deterministic-Dataflow",
-    "type mismatch": "Type-Mismatch",
-    "assignment missue": "Assignment misuse"
+    "unused signal": "Unused Circ. Signal"
 }
 
-ZKSOLID_BUGS = ["UCO", "USCI", "DCD", "TM", "US", "USCO", "AM", "NDD", "DBZ"]
+ZKSOLID_BUGS = ["UCO", "USCI", "DCD", "US", "USCO"]
 ZKSOLID_TO_CIRVERIFY = {
     "UCO": "unconstrained_output",
     "USCI": "unconstrained component input",
     "DCD": "data flow constraint discrepancy",
-    "TM": "type mismatch",
     "US": "unused signal",
-    "USCO": "unused component output",
-    "AM": "assignment missue",
-    "NDD": "nondeterministic data flow",
-    "DBZ": "divide by zero"
+    "USCO": "unused component output"
 }
+ZKSOLID_COLUMN_INDEX = {"UCO": 0, "USCI": 1, "DCD": 2, "US": 4, "USCO": 5}
 
 ZKAP_TO_CIRVERIFY = {v: k for k, v in CIRVERIFY_TO_ZKAP.items()}
 
@@ -234,7 +227,8 @@ while data:
                     vul_stats[bug]['TN'] += 1
 
             zksolid_values = col[13:22]
-            for i, bug_short in enumerate(ZKSOLID_BUGS):
+            for bug_short in ZKSOLID_BUGS:
+                i = ZKSOLID_COLUMN_INDEX[bug_short]
                 cir_bug = ZKSOLID_TO_CIRVERIFY[bug_short]
                 zkap_bug_name = CIRVERIFY_TO_ZKAP[cir_bug]
 

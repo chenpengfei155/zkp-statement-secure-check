@@ -152,7 +152,6 @@ class RealPicusTests(unittest.TestCase):
         checks = {item['id']: item for item in report['checks']}
         self.assertEqual(report['verdict'], 'warning', report)
         self.assertEqual(checks['output_uniqueness']['status'], 'pass')
-        self.assertEqual(checks['duplicate_constraints']['count'], 1)
         self.assertEqual(checks['trivial_constraints']['count'], 1)
 
     def test_cancellation_in_each_solver_stage_reaps_children(self):
@@ -175,7 +174,7 @@ class RealPicusTests(unittest.TestCase):
         checks = {item['id']: item for item in report['checks']}
         self.assertEqual(report['verdict'], 'unknown', report)
         self.assertEqual(checks['satisfiability']['status'], 'pass', report)
-        for key in ('unused_wires', 'trivial_constraints', 'duplicate_constraints'):
+        for key in ('unused_wires', 'trivial_constraints'):
             self.assertEqual(checks[key]['status'], 'pass', report)
         self.assertEqual(self.artifacts(), before)
 

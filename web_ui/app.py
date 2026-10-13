@@ -148,6 +148,10 @@ R1CS_EXAMPLES = {
 }
 
 
+@app.route('/design-options')
+def design_options():
+    return render_template('design_options.html')
+
 @app.route('/')
 def index():
     """Render the main page."""
@@ -379,10 +383,6 @@ SOURCE_CHECKS = (
     ('data flow constraint discrepancy', 'Data Flow / Constraint Discrepancy'),
     ('unused component output', 'Unused Component Output'),
     ('unused signal', 'Unused Signal'),
-    ('type mismatch', 'Type Mismatch'),
-    ('assignment missue', 'Assignment Misuse'),
-    ('divide by zero', 'Divide by Zero'),
-    ('nondeterministic data flow', 'Nondeterministic Data Flow'),
 )
 
 
@@ -701,4 +701,5 @@ if __name__ == '__main__':
     print("Starting CirVerify Web UI...")
     print("Access the application at: http://127.0.0.1:5000")
     app.run(debug=True, host='127.0.0.1', port=5000)
+
 

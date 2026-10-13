@@ -32,20 +32,8 @@ class Detector:
             print("[Info]       Detecting unused component output...")
             self.detect_unused_comp_output(graph)
 
-            print("[Info]       Detecting type mismatch...")
-            self.detect_type_mismatch(graph)
-
-            print("[Info]       Detecting assignment misuse...")
-            self.detect_assignment_misue(graph)
-
             print("[Info]       Detecting unused signals...")
             self.detect_unused_signal(graph)
-
-            print("[Info]       Detecting divide by zero unsafe...")
-            self.detect_divide_by_zero_unsafe(graph)
-
-            print("[Info]       Detecting nondeterministic data flow...")
-            self.detect_nondeterministic_data_flow(graph)
         return self.reports
 
     def detect_unconstrainted_output(self, graph):

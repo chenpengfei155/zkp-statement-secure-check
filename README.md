@@ -14,10 +14,6 @@ CirVerify detects a variety of potential issues in Circom circuits, including:
 - **Data Flow Constraint Discrepancy**: Finds signals that depend on others via dataflow but lack corresponding constraint dependencies.
 - **Unused Component Outputs**: Warns when outputs of components are not used or checked in the circuit.
 - **Unused Signals**: Identifies signals that are declared but never used in any computation or constraint.
-- **Type Mismatch**: Detects potential type mismatches, such as signals flowing into templates like `Num2Bits` without proper range checks.
-- **Assignment Misuse**: Finds assignment misuse, where a variable is assigned using the wrong operator.
-- **Divide by Zero**: Warns of potential divide-by-zero issues in the circuit.
-- **Non-deterministic Data Flow**: Flags conditional assignments depending on signals, which may lead to non-deterministic data flows.
 
 ## Installation
 
@@ -133,13 +129,7 @@ When you run the tool, you'll see progress information printed to the terminal, 
 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 3/3 [00:00<?, ?it/s]
 [Info]       Detecting unused component output...
 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:00<?, ?it/s]
-[Info]       Detecting type mismatch...
-100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:00<?, ?it/s]
-[Info]       Detecting assignment misuse...
-100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 7/7 [00:00<?, ?it/s]
 [Info]       Detecting unused signals...
-100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 7/7 [00:00<?, ?it/s]
-[Info]       Detecting nondeterministic data flow...
 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 7/7 [00:00<?, ?it/s]
 [Success]    Detection completed successfully.
 [Timeit]     Analysis completed in 0.30 s
@@ -171,11 +161,6 @@ The JSON file will contain detailed information about the analysis, including de
     "data flow constraint discrepancy": {
       ".\\demo.circom:4:4": [
         "Signal 'out' depends on 'a' via dataflow, but there is no corresponding constraint dependency."
-      ]
-    },
-    "assignment missue": {
-      ".\\demo.circom:5:4": [
-        "The dataflow for signal 'out' does not mathematically match any of its constraints."
       ]
     }
   }
@@ -253,7 +238,7 @@ The main controls are:
 | Select Example | Load a built-in example into the editor |
 | Upload File | Open `.circom` source or a binary `.r1cs` file for viewing and analysis |
 | Select Folder | Load the folder's `.circom` files into the file list, then select one to open |
-| Analyze | Run source checks for `.circom`, or six R1CS checks using Picus, cvc5 and structural analysis |
+| Analyze | Run source checks for `.circom`, or five R1CS checks using Picus, cvc5 and structural analysis |
 | Stop | Request cancellation; background detection may continue until the current computation finishes |
 | Clear | Close all file tabs, clear results, and release temporary R1CS uploads |
 
@@ -285,7 +270,7 @@ Circom source report, follow the [CLI examples](#example-usage) and use `--json`
 4. **Signed coefficients** is the default: for example, `p−1` appears as `−1`.
    Select **Original coefficients** to display the original nonnegative coefficients.
    Both views describe the same arithmetic modulo the modulus stored in the file.
-5. Install Picus once as described below, then click **Analyze** for the six-check
+5. Install Picus once as described below, then click **Analyze** for the five-check
    verdict, available counterexample and execution log.
    **Stop** cancels an active check; results stay with their file tab.
 
@@ -313,12 +298,12 @@ offline; no administrator rights are needed. Distribute the complete
 [`vendor/picus/windows-x64`](vendor/picus/windows-x64/README.md) folder with the project.
 Restart the web service after setup. Recheck with
 `.\.venv\Scripts\python.exe .\scripts\check_picus.py`.
-The existing six checks and result meanings are unchanged. Existing WSL installations
+The existing five checks and result meanings are unchanged. Existing WSL installations
 are no longer used by the Windows web service. Remove an old `CIRVERIFY_PICUS_HOME`
 setting if it points to a Linux path. On native Linux, use `bash scripts/setup_picus.sh`;
 the Windows runtime bundle does not support macOS or ARM64 Python.
 
-Each analysis now reports six independent checks:
+Each analysis now reports five independent checks:
 
 | Check | Meaning |
 |---|---|
@@ -327,9 +312,8 @@ Each analysis now reports six independent checks:
 | All-Signal Uniqueness | Picus `--strong` also checks internal wires; ambiguity is a finding for review, not automatically an exploitable bug. |
 | Unused Wires | Finds wires absent from effective constraints after cancellation, excluding the constant w0. |
 | Trivial Constraints | Finds equations that simplify to the zero polynomial, `0 = 0`. |
-| Duplicate Constraints | Finds repeated identical polynomials after expansion and reduction modulo the file's modulus; this does not detect all implied or redundant constraints. |
 
-`safe` means all six checks passed; `unsafe` means different outputs were found
+`safe` means all five checks passed; `unsafe` means different outputs were found
 for identical inputs. `warning` indicates strong-mode or structural findings to
 review. `unsatisfiable` means no assignment satisfies the constraints, and both
 uniqueness checks are skipped to avoid a vacuous pass. `unknown` is inconclusive,

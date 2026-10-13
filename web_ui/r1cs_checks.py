@@ -3,17 +3,12 @@
 These checks describe the compiled equations, not the original source program.
 All indices in reports are zero-based, as in the constraint viewer API.
 """
-import hashlib
-import json
-
-
 CHECK_NAMES = {
     'satisfiability': 'Constraint Satisfiability',
     'output_uniqueness': 'Output Uniqueness',
     'signal_uniqueness': 'All-Signal Uniqueness (including internal signals)',
     'unused_wires': 'Unused Wires',
     'trivial_constraints': 'Trivial Constraints',
-    'duplicate_constraints': 'Duplicate Constraints',
 }
 
 
@@ -36,15 +31,13 @@ def polynomial(a, b, c, prime):
 
 
 def prepare_checks(reader, query_path, checkpoint=lambda: None, *,
-                   expansion_limit=1_000_000, row_limit=20_000, index_limit=100_000):
+                   expansion_limit=1_000_000, row_limit=20_000):
     """Stream SMT and scan constraints. Capped work is reported as partial, never pass."""
     p = reader.prime
     used = bytearray(reader.wires)
-    seen = {}
-    findings = {'trivial_constraints': [], 'duplicate_constraints': []}
+    findings = {'trivial_constraints': []}
     counts = {key: 0 for key in findings}
     normalized = 0
-    indexed = 0
     spent = 0
 
     def record(identifier, item):
@@ -89,13 +82,6 @@ def prepare_checks(reader, query_path, checkpoint=lambda: None, *,
                     used[wire] = 1
             if not poly:
                 record('trivial_constraints', {'constraint': row['index']})
-            digest = hashlib.sha256(json.dumps(sorted(poly.items()), separators=(',', ':')).encode()).digest()
-            if digest in seen:
-                indexed += 1
-                record('duplicate_constraints', {'constraint': row['index'], 'duplicate_of': seen[digest]})
-            elif len(seen) < index_limit:
-                seen[digest] = row['index']
-                indexed += 1
         query.write('(check-sat)\n')
     unused = []
     unused_count = 0
@@ -113,13 +99,11 @@ def prepare_checks(reader, query_path, checkpoint=lambda: None, *,
          'wires absent from the effective constraints (excluding w0)'),
         ('trivial_constraints', counts['trivial_constraints'], findings['trivial_constraints'],
          normalized == total, 'constraints that simplify to 0 = 0'),
-        ('duplicate_constraints', counts['duplicate_constraints'], findings['duplicate_constraints'],
-         indexed == total, 'repeated equations after polynomial normalization'),
     ):
         status = 'warning' if count else 'pass' if complete else 'unknown'
         if count == 1:
             description = description.replace('wires absent', 'wire absent').replace(
-                'constraints that simplify', 'constraint that simplifies').replace('repeated equations', 'repeated equation')
+                'constraints that simplify', 'constraint that simplifies')
         message = f'Found {count} {description}.'
         if not complete:
             message += ' Partial scan: the structural-check work limit was reached.'

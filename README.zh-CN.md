@@ -14,10 +14,6 @@ CirVerify 可以检查 Circom 电路中的多类潜在问题，包括：
 - **计算依赖与约束依赖不一致**：发现计算使用了某个信号，但约束没有相应地限制它的情况。
 - **组件输出未使用**：提示组件的输出没有被使用或检查。
 - **信号未使用**：识别声明后没有参与任何计算或约束的信号。
-- **类型不匹配**：检查潜在的类型问题，例如信号进入 `Num2Bits` 等模板前缺少合适的范围检查。
-- **赋值使用不当**：检查赋值运算符使用不当等问题。
-- **除零风险**：提示计算中可能存在的除以零问题。
-- **非确定性数据流**：检查依赖信号值的条件赋值等可能导致非确定性数据流的情况。
 
 <a id="installation"></a>
 
@@ -135,13 +131,7 @@ macOS 或 Linux 使用。下面的命令直接指定环境里的程序路径，�
 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 3/3 [00:00<?, ?it/s]
 [Info]       Detecting unused component output...
 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:00<?, ?it/s]
-[Info]       Detecting type mismatch...
-100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:00<?, ?it/s]
-[Info]       Detecting assignment misuse...
-100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 7/7 [00:00<?, ?it/s]
 [Info]       Detecting unused signals...
-100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 7/7 [00:00<?, ?it/s]
-[Info]       Detecting nondeterministic data flow...
 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████| 7/7 [00:00<?, ?it/s]
 [Success]    Detection completed successfully.
 [Timeit]     Analysis completed in 0.30 s
@@ -174,11 +164,6 @@ JSON 文件按模板、问题类型和代码位置组织报告。下面是一个
     "data flow constraint discrepancy": {
       ".\\demo.circom:4:4": [
         "Signal 'out' depends on 'a' via dataflow, but there is no corresponding constraint dependency."
-      ]
-    },
-    "assignment missue": {
-      ".\\demo.circom:5:4": [
-        "The dataflow for signal 'out' does not mathematically match any of its constraints."
       ]
     }
   }
@@ -247,7 +232,7 @@ http://127.0.0.1:5000
 | Select Example | 选择内置示例，并将代码载入编辑区 |
 | Upload File | 打开 `.circom` 源码，或打开 `.r1cs` 二进制文件查看和检查约束 |
 | Select Folder | 将文件夹中的 `.circom` 文件载入左侧列表，再点击具体文件打开 |
-| Analyze | 检查当前标签页：Circom 运行源码检测，R1CS 运行 Picus、cvc5 和三项结构检查，共六项 |
+| Analyze | 检查当前标签页：Circom 运行源码检测，R1CS 运行 Picus、cvc5 和两项结构检查，共五项 |
 | Stop | 请求取消当前分析；后台检测可能继续运行到本次计算结束 |
 | Clear | 关闭所有文件标签页、清空结果，并释放临时上传的 R1CS 文件 |
 
@@ -274,7 +259,7 @@ http://127.0.0.1:5000
 4. 默认选择 **Signed coefficients（简洁系数）**，例如把 `p−1` 显示为 `−1`；选择
    **Original coefficients（原始系数）** 可以查看原来的非负大整数。两种显示都按文件中的模数计算，
    数学含义相同，不会修改上传文件。
-5. 完成下方的一次性 Picus 安装后，点击 **Analyze** 查看六项检查的独立结论和可用反例。
+5. 完成下方的一次性 Picus 安装后，点击 **Analyze** 查看五项检查的独立结论和可用反例。
    可以点击 **Stop** 取消；结果保存在对应文件标签页中。
    检测结果使用英文，与 Circom 共用 **Analysis Result** 标题、浅色结果框和文本日志样式；
    点击 **Run details and raw logs** 可查看运行详情及原始日志。
@@ -298,14 +283,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_picus.ps1
 并运行真实的正常和欠约束样例。安装和分析均可离线完成，不需要管理员权限。
 把项目给其他人时，请一并保留完整的
 [`vendor/picus/windows-x64`](vendor/picus/windows-x64/README.md) 文件夹。
-Picus 固定原版提交 `138b151d3a388e5b6c040c163e0a1db04f2ceda6`，六项检查及结论含义不变。
+Picus 固定原版提交 `138b151d3a388e5b6c040c163e0a1db04f2ceda6`，五项检查及结论含义不变。
 安装完成后重新启动网页服务；以后可用
 `.\.venv\Scripts\python.exe .\scripts\check_picus.py` 重新检查环境。
 Windows 网页服务不再调用旧的 WSL 安装。如果之前设置过指向 Linux 路径的
 `CIRVERIFY_PICUS_HOME`，请先移除该设置。原生 Linux 可使用 `bash scripts/setup_picus.sh`；
 此 Windows 运行包不支持 macOS 或 ARM64 Python。
 
-**R1CS Analyze 现在包含六项检查，分别显示结果：**
+**R1CS Analyze 现在包含五项检查，分别显示结果：**
 
 | 英文项目名称 | 检查内容 |
 |---|---|
@@ -314,16 +299,15 @@ Windows 网页服务不再调用旧的 WSL 安装。如果之前设置过指向 
 | All-Signal Uniqueness | Picus 强模式（`--strong`）检查包括内部变量在内的全部变量；不唯一作为待复核提示 |
 | Unused Wires | 查找化简后的有效约束中没有出现的变量，不含常量 w0 |
 | Trivial Constraints | 查找化简为零多项式，即 `0 = 0` 的约束 |
-| Duplicate Constraints | 查找展开并按文件模数化简后完全相同的多项式；不包含所有隐含或冗余约束 |
 
 例如，一个始终输出 `0` 的电路也可能满足“输出唯一”，但未必实现你想要的异或运算；
 业务功能是否正确仍需结合设计要求验证。
 
 | 结论 | 含义 |
 |---|---|
-| 六项通过（safe） | 六项检查均通过；仍需结合设计要求判断业务功能是否正确 |
+| 五项通过（safe） | 五项检查均通过；仍需结合设计要求判断业务功能是否正确 |
 | 发现欠约束（unsafe） | 相同输入可对应不同合法输出；页面展示可用的反例和运行日志 |
-| 存在待复核项（warning） | 内部变量等不唯一，或存在未使用变量、恒真和重复约束；不自动认定为安全漏洞 |
+| 存在待复核项（warning） | 内部变量等不唯一，或存在未使用变量、恒真约束；不自动认定为安全漏洞 |
 | 约束无解（unsatisfiable） | 不存在满足全部约束的赋值；跳过唯一性检查，不把无解误报为通过 |
 | 无法确定（unknown） | 求解预算或时间不足，不能当作通过 |
 | 分析未完成 / 已取消 | 环境、文件或运行错误 / 用户停止，不给出安全结论 |
