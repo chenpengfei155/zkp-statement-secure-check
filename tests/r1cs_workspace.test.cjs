@@ -193,7 +193,7 @@ test('R1CS Analyze dispatches by id and preserves reports across tab switches wi
     const checkCards = result.querySelectorAll('.r1cs-check-card');
     assert.equal(checkCards.length, 5);
     assert.ok(checkCards.some(card => card.className.includes('is-success')));
-    assert.equal(checkCards[0].querySelector('.r1cs-check-status').textContent, 'Success');
+    assert.equal(checkCards[0].querySelector('.r1cs-check-status').textContent, 'Clean');
     assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Success\]\s+Output Uniqueness: Output uniqueness verified/);
     assert.match(result.querySelector('.r1cs-result-output').textContent, /All five checks passed/);
     assert.ok(stream.closed);
@@ -258,7 +258,7 @@ test('Circom reports list successful and warning checks with expandable findings
     assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Warning\].*Data Flow \/ Constraint Discrepancy/);
     const checkCards = result.querySelectorAll('.r1cs-check-card');
     assert.equal(checkCards.filter(card => card.className.includes('is-warning')).length, 1);
-    assert.equal(checkCards[1].querySelector('.r1cs-check-status').textContent, 'Warning');
+    assert.equal(checkCards[1].querySelector('.r1cs-check-status').textContent, 'Review');
     assert.match(result.querySelector('summary').textContent, /Data Flow \/ Constraint Discrepancy: 1 finding/);
 });
 

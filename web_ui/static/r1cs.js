@@ -22,9 +22,9 @@ function appendCheckSummary(container, checks) {
     summary.className = 'r1cs-check-summary';
     const statusInfo = check => {
         const {id, status} = check;
-        if (status === 'pass') return ['success', 'Success'];
-        if (status === 'warning') return ['warning', 'Warning'];
-        if (status === 'fail') return [id === 'satisfiability' ? 'error' : 'warning', 'Warning'];
+        if (status === 'pass') return ['success', 'Clean'];
+        if (status === 'warning') return ['warning', 'Review'];
+        if (status === 'fail') return [id === 'satisfiability' ? 'error' : 'warning', 'Review'];
         if (status === 'error') return ['error', 'Error'];
         if (status === 'unknown') return ['unknown', 'Unknown'];
         if (status === 'skipped') return ['skipped', 'Skipped'];
