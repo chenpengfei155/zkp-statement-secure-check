@@ -16,12 +16,21 @@ function formatR1CSCombination(terms, prime, signed = true) {
     return parts.join('') || '0';
 }
 
-function appendCheckSummary(container, checks) {
-    if (!Array.isArray(checks) || !checks.length) return;
+function appendCheckSummary(container, checks, elapsedSeconds) {
+    const cards = Array.isArray(checks) ? [...checks] : [];
+    if (Number.isFinite(elapsedSeconds) && elapsedSeconds >= 0) {
+        cards.push({
+            status: 'time',
+            name: 'Total Detection Time',
+            message: `${elapsedSeconds.toFixed(2)} seconds`,
+        });
+    }
+    if (!cards.length) return;
     const summary = document.createElement('div');
     summary.className = 'r1cs-check-summary';
     const statusInfo = check => {
         const {id, status} = check;
+        if (status === 'time') return ['time', 'TIME'];
         if (status === 'pass') return ['success', 'Clean'];
         if (status === 'warning') return ['warning', 'Review'];
         if (status === 'fail') return [id === 'satisfiability' ? 'error' : 'warning', 'Review'];
@@ -31,7 +40,7 @@ function appendCheckSummary(container, checks) {
         if (status === 'cancelled') return ['warning', 'Cancelled'];
         return ['error', 'Error'];
     };
-    for (const check of checks) {
+    for (const check of cards) {
         const [style, label] = statusInfo(check);
         const card = document.createElement('div');
         card.className = `r1cs-check-card is-${style}`;
@@ -233,7 +242,7 @@ function renderR1CSReport(container, report) {
     }
     lines.push('', '='.repeat(50), `Result: ${verdict}`);
     container.append(element('h3', 'Analysis Result'));
-    appendCheckSummary(container, checks);
+    appendCheckSummary(container, checks, report.elapsed_seconds);
     container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
     for (const check of checks || []) {
         if (!check.findings?.length) continue;
@@ -332,7 +341,7 @@ function renderCircomReport(container, report) {
     container.replaceChildren();
     container.style.display = 'block';
     container.append(element('h3', 'Analysis Result'));
-    appendCheckSummary(container, checks);
+    appendCheckSummary(container, checks, report.elapsed_seconds);
     container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
 
     for (const check of checks) {

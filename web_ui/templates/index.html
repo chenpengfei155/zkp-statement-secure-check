@@ -232,8 +232,9 @@
             box-shadow: 0 2px 5px rgba(15, 23, 42, .06);
         }
         .r1cs-check-card.is-success { border-color: #a7d9b7; border-left-color: #2f855a; background: #f7fff9; }
-        .r1cs-check-card.is-warning { border-color: #f2c879; border-left-color: #c05621; background: #fffaf0; }
+        .r1cs-check-card.is-warning { border-color: #ed8b94; border-left-color: #bd2533; background: #fff6f6; }
         .r1cs-check-card.is-error { border-color: #f0a9a9; border-left-color: #c53030; background: #fff6f6; }
+        .r1cs-check-card.is-time { border-color: #b8c8ed; border-left-color: #5365e8; background: #f5f7ff; }
         .r1cs-check-card.is-unknown { border-color: #a9c5ee; border-left-color: #2b6cb0; background: #f5f9ff; }
         .r1cs-check-card.is-skipped { border-color: #cbd5e1; border-left-color: #64748b; background: #f8fafc; }
         .r1cs-check-status {
@@ -249,8 +250,9 @@
             line-height: 1.2;
         }
         .is-success .r1cs-check-status { background: #2f855a; }
-        .is-warning .r1cs-check-status { background: #c05621; }
+        .is-warning .r1cs-check-status { background: #bd2533; }
         .is-error .r1cs-check-status { background: #c53030; }
+        .is-time .r1cs-check-status { background: #5365e8; }
         .is-unknown .r1cs-check-status { background: #2b6cb0; }
         .r1cs-check-name { min-width: 0; color: #1e293b; font-size: 16px; font-weight: 750; line-height: 1.35; overflow-wrap: anywhere; }
         .r1cs-check-message { min-width: 0; color: #475569; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
@@ -372,10 +374,15 @@
         .picus-logs summary { cursor: pointer; padding: 10px 0; color: #334155; font-size: 16px; font-weight: 700; }
         .picus-logs pre { max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; color: #475569; }
         .picus-running { opacity: .7; }
-        .workspace-container.r1cs-active { height: clamp(520px, calc(100vh - 245px), 860px); }
+        .workspace-container.r1cs-active {
+            height: auto;
+            max-height: clamp(360px, 60vh, 560px);
+        }
+        .workspace-container.r1cs-active .editor-container,
+        .workspace-container.r1cs-active .file-explorer { max-height: inherit; }
         .r1cs-panel {
             --r1cs-muted: #a3adbf;
-            flex: 1; min-height: 0; overflow: auto; padding: 16px 22px;
+            flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px 22px;
             background: #1b1e27; color: #e5e9f2; color-scheme: dark;
             scrollbar-color: #444b60 #1b1e27;
         }
@@ -452,10 +459,12 @@
 .r1cs-check-message{font-size:16px;line-height:1.5}
 .r1cs-check-card.is-success{background:linear-gradient(135deg,#effdf5,#dff8ea);border-color:#75c997;border-left-color:#16834b}
 .r1cs-check-card.is-success .r1cs-check-status{background:#16834b}
-.r1cs-check-card.is-warning{background:linear-gradient(135deg,#fff8e8,#ffedc2);border-color:#efb34f;border-left-color:#c46b12}
-.r1cs-check-card.is-warning .r1cs-check-status{background:#c46b12}
+.r1cs-check-card.is-warning{background:linear-gradient(135deg,#fff0f1,#ffdfe2);border-color:#ed8b94;border-left-color:#bd2533}
+.r1cs-check-card.is-warning .r1cs-check-status{background:#bd2533}
 .r1cs-check-card.is-error{background:linear-gradient(135deg,#fff0f1,#ffdfe2);border-color:#ed8b94;border-left-color:#bd2533}
 .r1cs-check-card.is-error .r1cs-check-status{background:#bd2533}
+.r1cs-check-card.is-time{background:linear-gradient(135deg,#f5f7ff,#e8edff);border-color:#b8c8ed;border-left-color:#5365e8}
+.r1cs-check-card.is-time .r1cs-check-status{background:#5365e8}
 
         /* Product-style shell matching the reference layout. */
         body {
@@ -567,7 +576,7 @@
             .header p { font-size: 13px; }
             .r1cs-check-summary { grid-template-columns: 1fr; }
         }
-    </style>
+     .r1cs-check-card.is-warning { background: linear-gradient(135deg, #fff1f2, #ffe1e5); border-color: #ef4444; border-left-color: #dc2626; box-shadow: 0 8px 22px rgba(220,38,38,.2); } .r1cs-check-card.is-warning .r1cs-check-status { background: #dc2626; font-size: 12px; } .r1cs-check-card.is-warning .r1cs-check-name { color: #991b1b; font-size: 21px; } .r1cs-check-card.is-warning .r1cs-check-message { color: #b91c1c; font-weight: 700; }</style>
 </head>
 <body>
     <div class="container">
@@ -589,9 +598,19 @@
             <div class="controls">
                 <select id="exampleSelect">
                     <option value="">-- Select Example --</option>
-                    {% for name in examples.keys() %}
-                    <option value="{{ name }}">{{ name }}</option>
-                    {% endfor %}
+                    
+                    <option value="Single Assignment Issue">Single Assignment Issue</option>
+                    
+                    <option value="Unconstrained Output">Unconstrained Output</option>
+                    
+                    <option value="Valid Circuit">Valid Circuit</option>
+                    
+                    <option value="Unused Signal">Unused Signal</option>
+                    
+                    <option value="Unused Input (R1CS)">Unused Input (R1CS)</option>
+                    
+                    <option value="2-Bit XOR (R1CS)">2-Bit XOR (R1CS)</option>
+                    
                 </select>
                 <button class="secondary-action" onclick="document.getElementById('fileInput').click()">Upload</button>
                 <input type="file" id="fileInput" class="file-upload" accept=".circom,.r1cs">
@@ -671,6 +690,10 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/clike/clike.min.js"></script>
     <script src="{{ url_for('static', filename='r1cs.js') }}"></script>
     <script>
+        // Nginx mounts this app below /zkp/ while Flask still receives the
+        // stripped path.  Keep every browser request inside that mount.
+        window.CIRVERIFY_BASE_PATH = "";
+        window.cirverifyUrl = path => `${window.CIRVERIFY_BASE_PATH || ''}${path}`;
         const examples = {{ examples | tojson }};
         
         // File tree and editor management
@@ -704,7 +727,7 @@
         function releaseR1CS(state) {
             if (state && state.kind === 'r1cs') {
                 if (analysisBusy && currentAnalysisState === state) stopAnalysis();
-                fetch(`/r1cs/${state.id}`, {method: 'DELETE', keepalive: true}).catch(() => {});
+                fetch(cirverifyUrl(`/r1cs/${state.id}`), {method: 'DELETE', keepalive: true}).catch(() => {});
             }
         }
 
@@ -951,7 +974,7 @@
                         selection === exampleSequence && latestUploads.get(name) === sequence;
                     showResult('info', `Opening ${name}…`);
                     try {
-                        const response = await fetch(`/examples/r1cs/${encodeURIComponent(name)}`, {method: 'POST'});
+                        const response = await fetch(cirverifyUrl(`/examples/r1cs/${encodeURIComponent(name)}`), {method: 'POST'});
                         const data = await response.json();
                         if (!isCurrent()) {
                             releaseR1CS(data);
@@ -987,7 +1010,7 @@
             
             showResult('info', `Opening ${file.name}…`);
             try {
-                const response = await fetch('/upload', {method: 'POST', body: formData});
+                const response = await fetch(cirverifyUrl('/upload'), {method: 'POST', body: formData});
                 const data = await response.json();
                 if (generation !== workspaceGeneration || latestUploads.get(file.name) !== sequence) {
                     releaseR1CS(data);
@@ -1093,7 +1116,7 @@
             
             try {
                 // Start analysis and get session ID
-                const response = await fetch(isR1CS ? `/r1cs/${sourceState.id}/analyze` : '/analyze', {
+                const response = await fetch(cirverifyUrl(isR1CS ? `/r1cs/${sourceState.id}/analyze` : '/analyze'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(isR1CS ? {} : {
@@ -1104,7 +1127,7 @@
                 
                 const data = await response.json();
                 if (generation !== analysisGeneration) {
-                    if (data.session_id) fetch(`/stop/${data.session_id}`, {method: 'POST'}).catch(() => {});
+                    if (data.session_id) fetch(cirverifyUrl(`/stop/${data.session_id}`), {method: 'POST'}).catch(() => {});
                     return;
                 }
                 
@@ -1116,7 +1139,7 @@
                 
                 // Connect to progress stream
                 currentSessionId = data.session_id;
-                currentEventSource = new EventSource(`/progress/${currentSessionId}`);
+                currentEventSource = new EventSource(cirverifyUrl(`/progress/${currentSessionId}`));
                 
                 currentEventSource.onmessage = function(event) {
                     if (generation !== analysisGeneration) return;
@@ -1188,7 +1211,7 @@
             cleanupAnalysis();
             if (sessionId) {
                 try {
-                    await fetch(`/stop/${sessionId}`, { method: 'POST' });
+                    await fetch(cirverifyUrl(`/stop/${sessionId}`), { method: 'POST' });
                 } catch (err) {
                     console.error('Failed to stop analysis:', err);
                 }
@@ -1242,7 +1265,7 @@
                     formData.append(`path_${index}`, relativePath);
                 });
                 
-                const response = await fetch('/analyze_folder', {
+                const response = await fetch(cirverifyUrl('/analyze_folder'), {
                     method: 'POST',
                     body: formData
                 });
