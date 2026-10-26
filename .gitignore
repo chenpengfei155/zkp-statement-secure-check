@@ -22,6 +22,16 @@ callgrind.out.*
 cmake-build-debug/*
 release/*
 build/*
+# Keep these generated R1CS files (>50,000,000 bytes) local.
+/benchmarks/r1cs/circom-ecdsa__ECDSAVerifyNoPubkeyCheck@circom-ecdsa@n=64@k=4.r1cs
+/benchmarks/r1cs/circom-ecdsa__secp256k1ScalarMult@circom-ecdsa@n=64@k=4.r1cs
+/benchmarks/r1cs/ed25519-099d19c__scalarmul.r1cs
+/benchmarks/r1cs/maci-9b1b1a6-fixed__batchUpdateStateTree_32.r1cs
+/benchmarks/r1cs/maci-9b1b1a6-fixed__batchUpdateStateTree_32_batch16.r1cs
+/benchmarks/r1cs/maci-9b1b1a6-fixed__batchUpdateStateTree_32_batch256.r1cs
+/benchmarks/r1cs/maci-9b1b1a6-fixed__batchUpdateStateTree_large.r1cs
+/benchmarks/r1cs/maci-9b1b1a6-fixed__quadVoteTally_32_batch16.r1cs
+/benchmarks/r1cs/maci-9b1b1a6-fixed__quadVoteTally_32_batch256.r1cs
 .tools/picus*/
 !vendor/picus/windows-x64/manifest.json
 build-dist/*

@@ -5,6 +5,20 @@
 [Practical Security Analysis of Zero-Knowledge Proof Circuits](https://www.usenix.org/system/files/usenixsecurity24-wen_1.pdf#page=12)
 第 5.1 节、表 4 的统计一致。
 
+## 集中检测入口
+
+[`entries/`](entries/) 原有 258 个入口，按本机检测耗时筛选后保留 **234 个 `.circom` 入口**，已移除 24 个耗时超过 150 秒的入口。批量检测时使用此目录。
+文件命名为 `项目名__原文件名.circom`，避免不同项目的同名文件相互覆盖。
+这些文件是下表原始入口的副本，已调整 `include` 的相对路径；原项目目录保留以兼容现有脚本。
+[`entries/manifest.json`](entries/manifest.json) 记录每个集中入口与原始文件的对应关系。
+
+运行时请保留整个 `benchmarks/` 目录结构：入口仍引用 `libs/` 和原项目中的辅助源码，
+单独复制或上传 `entries/` 不能携带全部依赖。原始入口更新后，需要同步更新对应副本。
+`entries/` 是原始样本经耗时筛选后的集中副本，不应与下表原始目录重复计数。
+
+逐项耗时、超时删除记录和检测失败信息见 [`entries/timing_results.json`](entries/timing_results.json)。
+检测失败的入口保留；超时仅表示本机运行超过 150 秒，不代表电路有漏洞。
+
 ## 文件夹与入口数量
 
 以下路径均相对于 `benchmarks/`。只统计各文件夹**直接包含的 `.circom` 文件**，
