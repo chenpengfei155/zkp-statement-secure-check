@@ -11,7 +11,6 @@ import shutil
 import threading
 import queue
 import time
-from io import StringIO
 from pathlib import Path
 from werkzeug.datastructures import FileStorage
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -19,25 +18,29 @@ from werkzeug.exceptions import RequestEntityTooLarge
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from cirverify.core import detect, print_reports
+from cirverify.source_report import (
+    build_source_report, incomplete_source_report, summarize_source_analysis,
+)
 from cirverify.r1cs import R1CSError
 if __package__:
     from .r1cs_store import R1CSStore
     from .picus import PicusEngine, empty_report
+    from .source_analysis import analyze_source
 else:
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from r1cs_store import R1CSStore
     from web_ui.picus import PicusEngine, empty_report
+    from web_ui.source_analysis import analyze_source
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size for folder uploads
+app.config['SOURCE_TIMEOUT_SECONDS'] = os.environ.get('CIRVERIFY_SOURCE_TIMEOUT_SECONDS', '150')
 
 # Global queue for progress updates and thread management
 progress_queues = {}
 analysis_threads = {}
 stop_flags = {}
 analysis_finished = {}
-analysis_lock = threading.Lock()
 r1cs_analysis_lock = threading.Lock()
 r1cs_store = R1CSStore()
 picus_engine = PicusEngine()
@@ -72,39 +75,6 @@ def start_maintenance():
 @app.errorhandler(RequestEntityTooLarge)
 def upload_too_large(error):
     return jsonify({'error': 'Upload exceeds the 100 MiB request limit (including form data).'}), 413
-
-class ProgressCapture:
-    """Capture analyzer output without exposing implementation logs in the UI.
-
-    Circom's parser and detector use stdout for diagnostic messages and tqdm
-    progress bars.  The web result is intentionally a structured check summary,
-    so the captured text stays available to the caller but is not streamed to
-    the browser as user-facing progress.
-    """
-    def __init__(self, queue_obj):
-        self.queue = queue_obj
-        self.old_stdout = sys.stdout
-        self.old_stderr = sys.stderr
-        self.buffer = StringIO()
-        
-    def write(self, text):
-        self.buffer.write(text)
-        return len(text)
-    
-    def flush(self):
-        self.buffer.flush()
-    
-    def getvalue(self):
-        return self.buffer.getvalue()
-    
-    def __enter__(self):
-        sys.stdout = self
-        sys.stderr = self
-        return self
-    
-    def __exit__(self, *args):
-        sys.stdout = self.old_stdout
-        sys.stderr = self.old_stderr
 
 # Example circuits
 EXAMPLES = {
@@ -176,6 +146,27 @@ def open_r1cs_example(filename):
         return jsonify({'error': f'Could not open the bundled example {filename}.'}), 500
 
 
+def source_paths(paths):
+    """Validate upload names and remove a shared browser folder prefix."""
+    normalized = []
+    seen = set()
+    for path in paths:
+        if not isinstance(path, str):
+            raise ValueError('Source paths must be strings.')
+        path = path.replace('\\', '/')
+        parts = path.split('/')
+        if (any(part in ('', '.', '..') for part in parts) or ':' in path or '\x00' in path
+                or not path.lower().endswith('.circom')):
+            raise ValueError(f'Invalid source file path: {path}')
+        if path.casefold() in seen:
+            raise ValueError(f'Duplicate source file path: {path}')
+        seen.add(path.casefold())
+        normalized.append(parts)
+    shared_root = (normalized and all(len(parts) > 1 for parts in normalized)
+                   and len({parts[0] for parts in normalized}) == 1)
+    return ['/'.join(parts[1:] if shared_root else parts) for parts in normalized]
+
+
 @app.route('/analyze', methods=['POST'])
 def analyze():
     """Analyze the provided Circom code with progress streaming."""
@@ -183,8 +174,21 @@ def analyze():
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not isinstance(data.get('code'), str) or not data['code'].strip():
         return jsonify({'error': 'Please provide Circom source code.'}), 400
-    code = data['code'].strip()
+    code = data['code']
     filename = data.get('filename') if isinstance(data.get('filename'), str) else None
+    project_files = data.get('files')
+    project_paths = None
+    if project_files is not None:
+        try:
+            if (not isinstance(project_files, list) or not project_files
+                    or any(not isinstance(item, dict) or not isinstance(item.get('code'), str)
+                           for item in project_files)):
+                raise ValueError('Provide project files with a path and source code.')
+            project_paths = source_paths([item.get('path') for item in project_files])
+            if filename not in [item['path'] for item in project_files]:
+                raise ValueError('The selected entry must be included in the project files.')
+        except ValueError as error:
+            return jsonify({'error': str(error)}), 400
     session_id = str(uuid.uuid4())
     progress_queue = queue.Queue()
     progress_queues[session_id] = progress_queue
@@ -200,7 +204,8 @@ def analyze():
             
             # Check if stopped
             if stop_flags.get(session_id, threading.Event()).is_set():
-                progress_queue.put(('cancelled', 'Analysis cancelled by user'))
+                report = incomplete_source_report('cancelled', filename=filename)
+                progress_queue.put(('complete', {'summary': summarize_source_analysis(report), 'report': report}))
                 return
             
             # Check if code contains include statements with relative paths
@@ -212,7 +217,16 @@ def analyze():
             )
             
             # If there are relative includes, create temp file in benchmarks directory
-            if has_relative_includes:
+            if project_files is not None:
+                benchmarks_dir = Path(__file__).resolve().parent.parent / 'benchmarks'
+                temp_dir = tempfile.mkdtemp(prefix='cirverify_', dir=str(benchmarks_dir))
+                for item, relative_path in zip(project_files, project_paths):
+                    path = Path(temp_dir) / relative_path
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(code if item['path'] == filename else item['code'], encoding='utf-8')
+                    if item['path'] == filename:
+                        temp_path = str(path)
+            elif has_relative_includes:
                 project_root = Path(__file__).parent.parent
                 benchmarks_dir = project_root / 'benchmarks'
                 temp_dir = tempfile.mkdtemp(prefix='cirverify_', dir=str(benchmarks_dir))
@@ -226,32 +240,27 @@ def analyze():
             
             # Check if stopped before analysis
             if stop_flags.get(session_id, threading.Event()).is_set():
-                progress_queue.put(('cancelled', 'Analysis cancelled by user'))
+                report = incomplete_source_report('cancelled', filename=filename)
+                progress_queue.put(('complete', {'summary': summarize_source_analysis(report), 'report': report}))
                 return
             
-            # stdout capture is process-wide, so source analyses must not overlap.
-            with analysis_lock, ProgressCapture(progress_queue) as capture:
-                if stop_flags[session_id].is_set():
-                    progress_queue.put(('cancelled', 'Analysis cancelled by user'))
-                    return
-                started = time.monotonic()
-                graphs, reports = detect(temp_path)
-                if stop_flags[session_id].is_set():
-                    progress_queue.put(('cancelled', 'Analysis cancelled by user'))
-                    return
-                if not graphs or not reports:
-                    progress_queue.put(('error', 'Analysis failed. Check if the Circom code is valid.'))
-                    return
-                print_reports(graphs, reports)
-                source_report = build_source_report(
-                    graphs, reports, time.monotonic() - started, filename=filename)
-                progress_queue.put(('complete', {
-                    'summary': summarize_source_analysis(source_report),
-                    'report': source_report,
-                }))
-        except Exception as e:
-            if not stop_flags.get(session_id, threading.Event()).is_set():
-                progress_queue.put(('error', str(e)))
+            source_report = analyze_source(
+                temp_path, filename=filename,
+                timeout_seconds=app.config['SOURCE_TIMEOUT_SECONDS'],
+                cancelled=stop_flags[session_id].is_set,
+            )
+            progress_queue.put(('complete', {
+                'summary': summarize_source_analysis(source_report),
+                'report': source_report,
+            }))
+        except Exception as error:
+            app.logger.exception('Could not run source analysis')
+            source_report = incomplete_source_report(
+                'analysis_error', filename=filename, diagnostics=[str(error)])
+            progress_queue.put(('complete', {
+                'summary': summarize_source_analysis(source_report),
+                'report': source_report,
+            }))
         finally:
             # Also clean up if cancelled between file creation and detection.
             try:
@@ -285,9 +294,6 @@ def stop_analysis(session_id):
     flag = stop_flags.get(session_id)
     if flag:
         flag.set()
-        messages = progress_queues.get(session_id)
-        if messages is not None and session_id not in r1cs_sessions:
-            messages.put(('cancelled', 'Analysis cancelled by user'))
         return jsonify({'success': True, 'message': 'Analysis stop requested'})
     return jsonify({'success': False, 'message': 'Session not found'}), 404
 
@@ -337,7 +343,7 @@ def progress_stream(session_id):
                 elif msg_type == 'progress':
                     yield f"data: {json.dumps({'type': 'progress', 'data': content})}\n\n"
         finally:
-            if not terminal_consumed and session_id in r1cs_sessions:
+            if not terminal_consumed:
                 flag = stop_flags.get(session_id)
                 if flag:
                     flag.set()
@@ -375,73 +381,6 @@ def parse_progress(text):
         }
     
     return {'raw': text.strip()}
-
-
-SOURCE_CHECKS = (
-    ('unconstrained_output', 'Unconstrained Output'),
-    ('unconstrained component input', 'Unconstrained Component Input'),
-    ('data flow constraint discrepancy', 'Data Flow / Constraint Discrepancy'),
-    ('unused component output', 'Unused Component Output'),
-    ('unused signal', 'Unused Signal'),
-)
-
-
-def _source_finding(report, filename=None):
-    location = report.location
-    start = getattr(location, 'start', None)
-    line = getattr(start, 'line', None)
-    column = getattr(start, 'column', None)
-    path = filename or getattr(location, 'path', '')
-    if line is not None and column is not None:
-        display_location = f'{path}:{line}:{column}'
-    else:
-        display_location = path
-    return {'location': display_location, 'message': report.message}
-
-
-def build_source_report(graphs, reports, elapsed_seconds=None, filename=None):
-    """Build the check-by-check report rendered by the Circom result panel."""
-    checks = []
-    for check_id, name in SOURCE_CHECKS:
-        findings = []
-        seen = set()
-        for graph in graphs.values():
-            for report in reports.get(graph.name, {}).get(check_id, []):
-                finding = _source_finding(report, filename)
-                key = (finding['location'], finding['message'])
-                if key not in seen:
-                    seen.add(key)
-                    findings.append(finding)
-        count = len(findings)
-        checks.append({
-            'id': check_id,
-            'name': name,
-            'status': 'warning' if count else 'pass',
-            'count': count,
-            'message': f'Found {count} finding(s).' if count else 'No findings.',
-            'findings': findings,
-        })
-
-    warning_count = sum(check['count'] for check in checks)
-    report = {
-        'kind': 'circom',
-        'filename': filename,
-        'checks': checks,
-        'warning_count': warning_count,
-        'verdict': 'warning' if warning_count else 'safe',
-    }
-    if elapsed_seconds is not None:
-        report['elapsed_seconds'] = round(elapsed_seconds, 2)
-    return report
-
-
-def summarize_source_analysis(report):
-    """Return a backwards-compatible compact summary for the API client."""
-    if report['warning_count']:
-        status = 'Analysis completed with findings to review.'
-    else:
-        status = 'Analysis completed successfully.'
-    return f"{status}\nTotal warnings: {report['warning_count']}"
 
 
 @app.route('/upload', methods=['POST'])
@@ -593,29 +532,25 @@ def analyze_r1cs_upload(file_id):
     return jsonify({'session_id': session_id})
 
 
-def analyze_single_file(file_path, project_root):
-    """Analyze a single Circom file and return the result."""
+def analyze_single_file(file_path, project_root, filename=None):
+    """Return a report for this file, including incomplete analysis outcomes."""
+    filename = filename or os.path.basename(file_path)
     try:
-        with analysis_lock:
-            started = time.monotonic()
-            graphs, reports = detect(file_path)
-            if not graphs or not reports:
-                return {'success': False, 'error': 'Analysis failed. Check if the Circom code is valid.'}
-            with ProgressCapture(queue.Queue()):
-                print_reports(graphs, reports)
-            source_report = build_source_report(
-                graphs, reports, time.monotonic() - started,
-                filename=os.path.basename(file_path))
-            summary = summarize_source_analysis(source_report)
-        
-        return {
-            'success': True,
-            'warning_count': source_report['warning_count'],
-            'result': summary,
-            'report': source_report,
-        }
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
+        report = analyze_source(file_path, filename=filename,
+                                timeout_seconds=app.config['SOURCE_TIMEOUT_SECONDS'])
+    except Exception as error:
+        app.logger.exception('Could not analyze source file %s', filename)
+        report = incomplete_source_report(
+            'analysis_error', filename=filename, diagnostics=[str(error)])
+    completed = report.get('status') == 'completed'
+    return {
+        'success': completed,
+        'status': report.get('status', 'incomplete'),
+        'warning_count': report['warning_count'],
+        'result': summarize_source_analysis(report),
+        'report': report,
+        **({} if completed else {'error': report['message']}),
+    }
 
 
 @app.route('/analyze_folder', methods=['POST'])
@@ -645,17 +580,14 @@ def analyze_folder():
         if not file_data:
             return jsonify({'error': 'No .circom files found in the folder'}), 400
         
-        # Save all uploaded files preserving directory structure
+        try:
+            normalized_paths = source_paths([path for _, path in file_data])
+        except ValueError as error:
+            return jsonify({'error': str(error)}), 400
+
+        # Save all uploaded files preserving dependency paths.
         uploaded_files = []
-        for file, relative_path in file_data:
-            # Normalize path separators
-            relative_path = relative_path.replace('\\', '/')
-            # Remove leading folder name if present (webkitRelativePath includes folder name)
-            parts = relative_path.split('/')
-            if len(parts) > 1:
-                # Keep only the relative path within the folder
-                relative_path = '/'.join(parts[1:]) if len(parts) > 1 else parts[0]
-            
+        for (file, _), relative_path in zip(file_data, normalized_paths):
             file_path = os.path.join(temp_dir, relative_path)
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             file.save(file_path)
@@ -666,7 +598,7 @@ def analyze_folder():
         total_files = len(uploaded_files)
         
         for idx, (file_path, relative_path) in enumerate(uploaded_files, 1):
-            result = analyze_single_file(file_path, project_root)
+            result = analyze_single_file(file_path, project_root, filename=relative_path)
             result['file'] = relative_path
             result['index'] = idx
             result['total'] = total_files
@@ -675,15 +607,20 @@ def analyze_folder():
         # Count successes and failures
         success_count = sum(1 for r in results if r['success'])
         fail_count = total_files - success_count
+        skipped_count = sum(r['status'] == 'not_applicable' for r in results)
         
         return jsonify({
             'success': True,
             'total_files': total_files,
             'success_count': success_count,
             'fail_count': fail_count,
+            'incomplete_count': fail_count - skipped_count,
+            'skipped_count': skipped_count,
             'results': results
         })
         
+    except RequestEntityTooLarge:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()

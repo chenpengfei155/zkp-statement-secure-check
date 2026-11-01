@@ -381,10 +381,11 @@ def run(args):
                 checks[check['id']] = check
             preparing = False
             active = 'satisfiability'
-            checks[active] = run_child(
-                [str(solver_path(prefix)), '--lang', 'smt2', f'--tlimit-per={args.query_timeout_ms}', str(query_path)],
-                SatisfiabilityOutput(), job, env, cancelled,
-                min(deadline, time.monotonic() + args.query_timeout_ms / 1000 + 2), started, CHECK_NAMES[active], args.memory_mib)
+            if checks[active].get('reason') == 'not_started':
+                checks[active] = run_child(
+                    [str(solver_path(prefix)), '--lang', 'smt2', f'--tlimit-per={args.query_timeout_ms}', str(query_path)],
+                    SatisfiabilityOutput(), job, env, cancelled,
+                    min(deadline, time.monotonic() + args.query_timeout_ms / 1000 + 2), started, CHECK_NAMES[active], args.memory_mib)
             if checks[active]['status'] == 'fail':
                 for key in ('output_uniqueness', 'signal_uniqueness'):
                     if checks[key].get('reason') != 'no_outputs':

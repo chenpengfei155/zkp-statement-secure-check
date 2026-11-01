@@ -95,6 +95,44 @@ class TypeCheck(BaseVisitor):
         self.signal_out = None
         self.is_multi_sub = False
         self.count_visited = 0
+        self.component_templates = {}
+        self.loop_depth = 0
+
+    def collect_component_templates(self, ast, scopes):
+        """Infer component declarations from instantiations before checking ports.
+
+        A loop can read a previous array element before instantiating its current
+        element. Static traversal visits the loop body only once, so source order
+        alone cannot determine the array's template. Keep this lookup scoped to
+        declarations; the normal pass still validates every assignment and call.
+        """
+        if isinstance(ast, Block):
+            local_scopes = [{}] + scopes
+            for statement in ast.stmts:
+                self.collect_component_templates(statement, local_scopes)
+        elif isinstance(ast, InitializationBlock):
+            for statement in ast.initializations:
+                self.collect_component_templates(statement, scopes)
+        elif isinstance(ast, Declaration):
+            scopes[0][ast.name] = ast
+        elif isinstance(ast, IfThenElse):
+            self.collect_component_templates(ast.if_case, scopes)
+            if ast.else_case:
+                self.collect_component_templates(ast.else_case, scopes)
+        elif isinstance(ast, While):
+            self.collect_component_templates(ast.stmt, scopes)
+        elif isinstance(ast, Substitution) and ast.op == "=":
+            declaration = next((scope[ast.var] for scope in scopes if ast.var in scope), None)
+            if (isinstance(declaration, Declaration)
+                    and isinstance(declaration.xtype, Component)
+                    and len(ast.access) == len(declaration.dimensions)
+                    and all(isinstance(access, ArrayAccess) for access in ast.access)):
+                expression = ast.rhe
+                if isinstance(expression, ParallelOp):
+                    expression = expression.rhe
+                if isinstance(expression, Call) and expression.id in self.list_template:
+                    self.component_templates.setdefault(id(declaration),
+                                                        self.list_template[expression.id].mtype)
 
     def infer_type(self, var, param, typ=PrimeField()):
         symbol = None
@@ -221,6 +259,10 @@ class TypeCheck(BaseVisitor):
 
     def visitProgram(self, ast: Program, param):
         for _ in range(2):
+            if self.count_visited == 1:
+                for definition in ast.definitions:
+                    if isinstance(definition, Template):
+                        self.collect_component_templates(definition.body, [{}])
             for definition in ast.definitions:
                 self.visit(definition, param)
             self.count_visited += 1
@@ -257,7 +299,11 @@ class TypeCheck(BaseVisitor):
         elif isinstance(cond_type, ArrayCircom):
             raise Report(ReportType.ERROR, ast.cond.locate,
                          "Must be a single arithmetic expression. Found array")
-        self.visit(ast.stmt, param)
+        self.loop_depth += 1
+        try:
+            self.visit(ast.stmt, param)
+        finally:
+            self.loop_depth -= 1
 
     def visitReturn(self, ast: Return, param):
         if self.in_function:
@@ -398,7 +444,8 @@ class TypeCheck(BaseVisitor):
                     else:
                         if lhe_type.name != rhe_type.name:
                             raise Report(ReportType.ERROR, ast.locate,
-                                         "Assignee and assigned types do not match.")
+                                         f"Component '{ast.var}' has template '{lhe_type.name}', "
+                                         f"but is assigned template '{rhe_type.name}'.")
                 elif not is_same_type(lhe_type, rhe_type):
                     if rhe_type is None:
                         self.infer_type(ast.rhe, param, lhe_type)
@@ -576,7 +623,17 @@ class TypeCheck(BaseVisitor):
                 if not isinstance(var_type, TemplateCircom):
                     raise Report(ReportType.ERROR, ast.locate,
                                  f"Variable '{ast.name}' is not a component")
-                # print(ast.locate)
+                if (not var_type.name and self.loop_depth
+                        and isinstance(symbol.xtype, ComponentCircom)
+                        and isinstance(symbol.mtype, ArrayCircom)):
+                    # A previous loop iteration can initialize this array element
+                    # after the current source position in the symbolic traversal.
+                    var_type = self.component_templates.get(id(symbol.ast), var_type)
+                if access_type not in var_type.signals:
+                    raise Report(ReportType.ERROR, ast.locate,
+                                 f"Signal '{access_type}' not declared in component '{ast.name}'"
+                                 + (f" of template '{var_type.name}'" if var_type.name else
+                                    "; its template type could not be inferred"))
                 signal_type = var_type.signals[access_type]
                 if isinstance(signal_type, ArrayCircom):
                     var_type = ArrayCircom(

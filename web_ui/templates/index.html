@@ -701,6 +701,7 @@
         let openFiles = {};
         let activeFile = null;
         let scratchCode = '';
+        let sourceFolderFiles = [];
         let workspaceGeneration = 0;
         let uploadSequence = 0;
         const latestUploads = new Map();
@@ -1039,6 +1040,7 @@
             }
             
             // Build and render file tree
+            sourceFolderFiles = circomFiles;
             fileTree = buildFileTree(circomFiles);
             renderFileTree(fileTree, document.getElementById('fileTree'));
             
@@ -1072,8 +1074,8 @@
                     if (type === 'r1cs') document.getElementById('result').scrollIntoView({behavior: 'smooth', block: 'start'});
                 }
             };
-            const code = isR1CS ? '' : editor.getValue().trim();
-            if (!isR1CS && !code) {
+            const code = isR1CS ? '' : editor.getValue();
+            if (!isR1CS && !code.trim()) {
                 showResult('error', 'Please enter some Circom code');
                 return;
             }
@@ -1115,14 +1117,22 @@
             progressLog.innerHTML = '';
             
             try {
+                let requestBody = isR1CS ? {} : {
+                    code, filename: sourceState?.metadata?.filename || sourceState?.path || undefined
+                };
+                if (!isR1CS && sourceState && sourceFolderFiles.some(
+                    file => (file.webkitRelativePath || file.name) === sourceState.path)) {
+                    requestBody.files = await Promise.all(sourceFolderFiles.map(async file => {
+                        const path = file.webkitRelativePath || file.name;
+                        return {path, code: openFiles[path]?.content ?? await file.text()};
+                    }));
+                }
+                if (generation !== analysisGeneration) return;
                 // Start analysis and get session ID
                 const response = await fetch(cirverifyUrl(isR1CS ? `/r1cs/${sourceState.id}/analyze` : '/analyze'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(isR1CS ? {} : {
-                        code,
-                        filename: sourceState?.metadata?.filename || sourceState?.path || undefined
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const data = await response.json();
@@ -1160,7 +1170,8 @@
                             progressBar.style.width = '100%';
                             progressBar.textContent = '100%';
                         }
-                        progressText.textContent = 'Analysis completed!';
+                        progressText.textContent = message.report?.status === 'incomplete'
+                            ? 'Analysis returned an incomplete result.' : 'Analysis finished.';
                         cleanupAnalysis();
                         if (isR1CS) {
                             publish('r1cs', {...message.result, filename: sourceState.metadata.filename});
@@ -1206,6 +1217,12 @@
                     reason: 'cancelled', elapsed_seconds: Math.max(0, Math.round((Date.now() - state.analysisStarted) / 100) / 10), logs: []};
                 state.result = {type: 'r1cs', message};
                 if (openFiles[activeFile] === state) showResult('r1cs', message);
+            } else {
+                const message = {kind: 'circom', filename: state?.path, verdict: 'cancelled',
+                    status: 'cancelled', warning_count: null, checks: [],
+                    message: 'Analysis cancelled. No safety conclusion was reached.'};
+                if (state) state.result = {type: 'circom', message};
+                if (!state || openFiles[activeFile] === state) showResult('circom', message);
             }
             analysisGeneration++;
             cleanupAnalysis();
@@ -1288,37 +1305,25 @@
         // Show folder analysis result
         function showFolderResult(data) {
             const result = document.getElementById('result');
-            const resultStyle = data.fail_count === 0 ? 'success'
-                : data.success_count === 0 ? 'error' : 'warning';
-            result.className = 'result ' + resultStyle;
-
-            const successful = data.results.filter(fileResult => fileResult.success);
-            const failed = data.results.filter(fileResult => !fileResult.success);
-            let html = '<h3>Folder Analysis Results</h3>';
-            html += `<div class="progress-info">`;
-            html += `Total files: ${data.total_files} | `;
-            html += `Success: ${data.success_count} | `;
-            html += `Failed: ${data.fail_count}`;
-            html += `</div>`;
-
-            if (successful.length) {
-                html += '<div class="file-result success"><div class="file-result-header">Successful projects</div><ul>';
-                successful.forEach(fileResult => {
-                    const warnings = Number.isFinite(fileResult.warning_count)
-                        ? ` (${fileResult.warning_count} warnings)` : '';
-                    html += `<li>${escapeHtml(fileResult.file)}${warnings}</li>`;
-                });
-                html += '</ul></div>';
+            const hasFindings = data.results.some(item => item.warning_count > 0);
+            result.className = 'result ' + (data.fail_count || hasFindings ? 'warning' : 'success');
+            result.replaceChildren();
+            const title = document.createElement('h3');
+            title.textContent = 'Folder Analysis Results';
+            const counts = document.createElement('p');
+            counts.textContent = `Total: ${data.total_files} | Completed: ${data.success_count} | `
+                + `Incomplete: ${data.incomplete_count ?? data.fail_count} | Library files: ${data.skipped_count || 0}`;
+            result.append(title, counts);
+            for (const item of data.results) {
+                const details = document.createElement('details');
+                const summary = document.createElement('summary');
+                summary.textContent = `${item.file}: ${item.report?.verdict || 'unknown'}`;
+                const body = document.createElement('div');
+                renderCircomReport(body, item.report || {kind: 'circom', filename: item.file,
+                    verdict: 'unknown', message: item.error || 'Analysis could not complete.', checks: []});
+                details.append(summary, body);
+                result.append(details);
             }
-            if (failed.length) {
-                html += '<div class="file-result error"><div class="file-result-header">Failed projects</div><ul>';
-                failed.forEach(fileResult => {
-                    html += `<li>${escapeHtml(fileResult.file)}: ${escapeHtml(fileResult.error || 'Analysis failed')}</li>`;
-                });
-                html += '</ul></div>';
-            }
-
-            result.innerHTML = html;
             result.style.display = 'block';
         }
 
@@ -1358,6 +1363,7 @@
             r1csViewer.hide();
             activeFile = null;
             scratchCode = '';
+            sourceFolderFiles = [];
             editor.setValue('');
             document.getElementById('exampleSelect').value = '';
             document.getElementById('result').style.display = 'none';

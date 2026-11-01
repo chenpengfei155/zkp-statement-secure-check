@@ -132,7 +132,7 @@ class WebPicusTests(unittest.TestCase):
     def test_engine_endpoint_and_dispatch_do_not_call_source_analyzer(self):
         self.assertTrue(self.client.get('/r1cs/engine').json['ready'])
         identifier = self.upload()
-        with patch.object(web, 'detect') as detect:
+        with patch.object(web, 'analyze_source') as detect:
             response = self.client.post(f'/r1cs/{identifier}/analyze', json={'command': 'ignored'})
             report = self.result(response.json['session_id'])
         self.assertEqual(report['verdict'], 'safe')

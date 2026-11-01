@@ -30,6 +30,8 @@ def generate_ast(filename):
         inputstream = FileStream(filename, encoding='utf-8')
         lexer = CircomLexer(inputstream)
         listener = Errors.NewErrorListener.INSTANCE
+        lexer.removeErrorListeners()
+        lexer.addErrorListener(listener)
         tokens = CommonTokenStream(lexer)
 
         parser = CircomParser(tokens)
@@ -63,7 +65,7 @@ def typecheck(ast):
     try:
         checked.check()
     except Exception as e:
-        # traceback.print_exc()
+        traceback.print_exc(limit=8)
         print(e)
         return None, None, None
     return checked.global_env, checked.list_function, checked.list_template

@@ -102,17 +102,25 @@ class R1CSFile:
         if count > (end - stream.tell()) // (4 + self.field_size):
             raise R1CSError('Invalid number of terms in a constraint.')
         terms = [] if collect else None
-        previous = -1
+        seen = set()
         for _ in range(count):
             wire = self._uint32(stream, end)
             coefficient = int.from_bytes(self._read(stream, self.field_size, end), 'little')
-            if wire >= self.wires or wire <= previous:
-                raise R1CSError('Constraint variable indices must be in range and sorted without duplicates.')
+            if wire >= self.wires:
+                raise R1CSError(f'Constraint variable index {wire} is outside the valid range 0..{self.wires - 1}.')
+            if wire in seen:
+                raise R1CSError(f'Duplicate variable index {wire} in a constraint linear combination.')
             if coefficient >= self.prime:
                 raise R1CSError('Constraint coefficient is outside the field modulus.')
-            previous = wire
+            seen.add(wire)
             if collect:
                 terms.append({'wire': wire, 'coefficient': str(coefficient)})
+        if collect:
+            # The format specifies ascending indices, but some producers emit
+            # unsorted sparse terms. Reorder whole pairs without changing A/B/C.
+            # Duplicate indices stay invalid: downstream map readers could
+            # otherwise silently overwrite a coefficient.
+            terms.sort(key=lambda term: term['wire'])
         return terms
 
     def page(self, offset=0, limit=50):

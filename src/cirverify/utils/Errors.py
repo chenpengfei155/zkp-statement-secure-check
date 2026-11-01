@@ -6,8 +6,9 @@ class NewErrorListener(ConsoleErrorListener):
     INSTANCE = None
 
     def syntaxError(self, recognizer, offendingSymbol, line, column, msg, e):
-        raise SyntaxException("Error on line " + str(line) +
-                              " col " + str(column) + ": " + offendingSymbol.text)
+        # Lexer errors have no offending token; ANTLR's message identifies
+        # both the invalid character and parser expectations without losing it.
+        raise SyntaxException(f"Error on line {line} col {column}: {msg}")
 
 
 NewErrorListener.INSTANCE = NewErrorListener()
@@ -15,6 +16,7 @@ NewErrorListener.INSTANCE = NewErrorListener()
 
 class SyntaxException(Exception):
     def __init__(self, msg):
+        super().__init__(msg)
         self.message = msg
 
 

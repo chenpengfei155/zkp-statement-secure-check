@@ -3,6 +3,10 @@
 These checks describe the compiled equations, not the original source program.
 All indices in reports are zero-based, as in the constraint viewer API.
 """
+import math
+import time
+
+
 CHECK_NAMES = {
     'satisfiability': 'Constraint Satisfiability',
     'output_uniqueness': 'Output Uniqueness',
@@ -10,6 +14,18 @@ CHECK_NAMES = {
     'unused_wires': 'Unused Wires',
     'trivial_constraints': 'Trivial Constraints',
 }
+
+
+def _known_prime(prime):
+    """Keep the witness shortcut within proven prime fields.
+
+    BN254 is the default Circom field. Small fields can be checked exactly with
+    bounded trial division; other moduli retain cvc5's finite-field validation.
+    """
+    if prime == 21888242871839275222246405745257275088548364400416034343698204186575808495617:
+        return True
+    return (2 <= prime <= 65536
+            and all(prime % divisor for divisor in range(2, math.isqrt(prime) + 1)))
 
 
 def check_result(identifier, status, message, **details):
@@ -32,13 +48,20 @@ def polynomial(a, b, c, prime):
 
 def prepare_checks(reader, query_path, checkpoint=lambda: None, *,
                    expansion_limit=1_000_000, row_limit=20_000):
-    """Stream SMT and scan constraints. Capped work is reported as partial, never pass."""
+    """Scan constraints, verify a candidate assignment, and prepare the SMT fallback.
+
+    A failed candidate says nothing about satisfiability. Structural expansion
+    limits never skip the exact assignment check on an individual constraint.
+    """
+    started = time.monotonic()
     p = reader.prime
     used = bytearray(reader.wires)
     findings = {'trivial_constraints': []}
     counts = {key: 0 for key in findings}
     normalized = 0
     spent = 0
+    zero_assignment_valid = True
+    constraints_checked = 0
 
     def record(identifier, item):
         counts[identifier] += 1
@@ -65,6 +88,12 @@ def prepare_checks(reader, query_path, checkpoint=lambda: None, *,
             checkpoint()
             a, b, c = ({t['wire']: int(t['coefficient']) for t in row[key]
                         if int(t['coefficient'])} for key in ('a', 'b', 'c'))
+            # w0 is always 1. With all other wires 0, each combination equals
+            # its constant coefficient. A complete successful verification is
+            # a concrete witness of existence, independent of uniqueness.
+            if (a.get(0, 0) * b.get(0, 0) - c.get(0, 0)) % p:
+                zero_assignment_valid = False
+            constraints_checked += 1
             query.write(f'(assert (= (ff.mul {combination(a)} {combination(b)}) {combination(c)}))\n')
             cost = len(a) * len(b) + len(c)
             if cost > row_limit or spent + cost > expansion_limit:
@@ -110,6 +139,13 @@ def prepare_checks(reader, query_path, checkpoint=lambda: None, *,
         checks.append(check_result(identifier, status, message, count=count, findings=items,
                                    truncated=count > len(items), complete=complete,
                                    reason='completed' if complete else 'scan_limit'))
+    if zero_assignment_valid and constraints_checked == total and _known_prime(p):
+        checks.append(check_result(
+            'satisfiability', 'pass',
+            'At least one assignment satisfies all constraints: verified w0 = 1 and all other wires = 0.',
+            method='verified_zero_assignment', reason='completed',
+            witness={'w0': '1', 'other_wires': '0', 'constraints_verified': total},
+            elapsed_seconds=round(time.monotonic() - started, 2)))
     return checks
 
 

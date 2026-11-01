@@ -306,14 +306,24 @@ function renderR1CSReport(container, report) {
 
 function renderCircomReport(container, report) {
     const checks = Array.isArray(report.checks) ? report.checks : [];
+    const requiredChecks = ['unconstrained_output', 'unconstrained component input',
+        'data flow constraint discrepancy', 'unused component output', 'unused signal'];
+    const completed = (report.status === 'completed' || !report.status)
+        && ['safe', 'warning'].includes(report.verdict)
+        && checks.length === requiredChecks.length
+        && requiredChecks.every(id => checks.some(check => check.id === id))
+        && Number.isInteger(report.warning_count) && report.warning_count >= 0
+        && checks.every(check => ['pass', 'warning'].includes(check.status));
     const warningCount = Number.isFinite(report.warning_count)
-        ? report.warning_count : checks.reduce((total, check) => total + (check.count || 0), 0);
-    const verdict = report.verdict || (warningCount ? 'warning' : 'safe');
-    const hasWarnings = verdict === 'warning' || warningCount > 0;
-    const outcomeLevel = hasWarnings ? 'Warning' : 'Success';
-    const outcomeMessage = hasWarnings
-        ? 'Analysis completed with findings to review.'
-        : 'Analysis completed successfully.';
+        ? report.warning_count : null;
+    const verdict = completed ? (warningCount > 0 || checks.some(check => check.status === 'warning') ? 'warning' : report.verdict)
+        : ['cancelled', 'not_applicable'].includes(report.verdict) ? report.verdict : 'unknown';
+    const outcomeLevel = completed ? (verdict === 'warning' ? 'Warning' : 'Success') : 'Info';
+    const outcomeMessage = report.message || (completed
+        ? verdict === 'warning' ? 'Analysis completed with findings to review.' : 'Analysis completed successfully.'
+        : verdict === 'cancelled' ? 'Analysis cancelled. No safety conclusion was reached.'
+        : verdict === 'not_applicable' ? 'This library has no main component. Analyze an entry circuit that includes it.'
+        : 'Analysis is incomplete. No safety conclusion was reached.');
     const element = (tag, text, className = '') => {
         const node = document.createElement(tag);
         node.textContent = text;
@@ -328,7 +338,7 @@ function renderCircomReport(container, report) {
         '',
     ];
     for (const check of checks) {
-        const level = check.status === 'pass' ? 'Success' : 'Warning';
+        const level = check.status === 'pass' ? 'Success' : check.status === 'warning' ? 'Warning' : 'Info';
         lines.push(logLine(level, `${check.name}: ${check.message}`));
     }
     lines.push('', logLine(outcomeLevel, outcomeMessage));
@@ -337,12 +347,21 @@ function renderCircomReport(container, report) {
     }
     lines.push('', '='.repeat(50), `Result: ${verdict}`);
 
-    container.className = `result ${hasWarnings ? 'warning' : 'success'} r1cs-report circom-report`;
+    const style = completed ? verdict === 'warning' ? 'warning' : 'success'
+        : verdict === 'unknown' ? 'warning' : 'info';
+    container.className = `result ${style} r1cs-report circom-report`;
     container.replaceChildren();
     container.style.display = 'block';
     container.append(element('h3', 'Analysis Result'));
     appendCheckSummary(container, checks, report.elapsed_seconds);
     container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
+
+    if (report.diagnostics?.length) {
+        const details = element('details', '', 'picus-logs');
+        details.append(element('summary', 'Why analysis could not complete'));
+        details.append(element('pre', report.diagnostics.join('\n')));
+        container.append(details);
+    }
 
     for (const check of checks) {
         if (!check.findings?.length) continue;

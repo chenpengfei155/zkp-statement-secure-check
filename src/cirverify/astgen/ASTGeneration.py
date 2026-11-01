@@ -31,6 +31,8 @@ class ASTGeneration(CircomVisitor):
             inputstream = FileStream(absolute_path, encoding='utf-8')
             lexer = CircomLexer(inputstream)
             listener = Errors.NewErrorListener.INSTANCE
+            lexer.removeErrorListeners()
+            lexer.addErrorListener(listener)
             tokens = CommonTokenStream(lexer)
             parser = CircomParser(tokens)
             parser.removeErrorListeners()
@@ -47,6 +49,8 @@ class ASTGeneration(CircomVisitor):
                 return None
             try:
                 asttree = ASTGeneration().generate_ast(absolute_path, tree, path_env)
+                if asttree is None:
+                    return None
                 if asttree.main_component:
                     Report(ReportType.ERROR, FileLocation(
                         absolute_path, None, None), "Main component found in include file", False).show()
@@ -86,10 +90,9 @@ class ASTGeneration(CircomVisitor):
     def visitDefinition_block(self, ctx: CircomParser.Definition_blockContext):
         return self.visit(ctx.getChild(0))
 
-    # definition_list: definition_block definition_list | ;
+    # definition_list: definition_block*;
     def visitDefinition_list(self, ctx: CircomParser.Definition_listContext):
-        return [self.visit(ctx.definition_block())] + self.visit(
-            ctx.definition_list()) if ctx.definition_block() else []
+        return [self.visit(definition) for definition in ctx.definition_block()]
 
     # pragma_definition: PRAGMA CIRCOM version SEMICOLON;
     def visitPragma_definition(self, ctx: CircomParser.Pragma_definitionContext):
@@ -99,10 +102,9 @@ class ASTGeneration(CircomVisitor):
     def visitCustom_gate(self, ctx: CircomParser.Custom_gateContext):
         pass
 
-    # include_list: include_definition include_list | ;
+    # include_list: include_definition*;
     def visitInclude_list(self, ctx: CircomParser.Include_listContext):
-        return [self.visit(ctx.include_definition())] + self.visit(
-            ctx.include_list()) if ctx.include_definition() else []
+        return [self.visit(include) for include in ctx.include_definition()]
 
     # include_definition: INCLUDE STRING SEMICOLON;
     def visitInclude_definition(self, ctx: CircomParser.Include_definitionContext):
@@ -153,9 +155,9 @@ class ASTGeneration(CircomVisitor):
     def visitStatement(self, ctx: CircomParser.StatementContext):
         return self.visit(ctx.getChild(0))
 
-    # statement_list: statement statement_list | ;
+    # statement_list: statement*;
     def visitStatement_list(self, ctx: CircomParser.Statement_listContext):
-        return [self.visit(ctx.statement())] + self.visit(ctx.statement_list()) if ctx.statement() else []
+        return [self.visit(statement) for statement in ctx.statement()]
 
     # declaration_statement: declaration SEMICOLON;
     def visitDeclaration_statement(self, ctx):
@@ -289,10 +291,9 @@ class ASTGeneration(CircomVisitor):
     def visitDeclaration(self, ctx: CircomParser.DeclarationContext):
         return self.visit(ctx.getChild(0))
 
-    # identifier_list: IDENTIFIER COMMA identifier_list | IDENTIFIER;
+    # identifier_list: IDENTIFIER (COMMA IDENTIFIER)*;
     def visitIdentifier_list(self, ctx: CircomParser.Identifier_listContext):
-        return [ctx.IDENTIFIER().getText()] + self.visit(ctx.identifier_list()) if ctx.identifier_list() else [
-            ctx.IDENTIFIER().getText()]
+        return [identifier.getText() for identifier in ctx.IDENTIFIER()]
 
     # tag_list: LC identifier_list RC;
     def visitTag_list(self, ctx: CircomParser.Tag_listContext):
@@ -306,10 +307,9 @@ class ASTGeneration(CircomVisitor):
     def visitSimple_symbol(self, ctx: CircomParser.Simple_symbolContext):
         return (ctx.IDENTIFIER().getText(), self.visit(ctx.array_access_list()), None)
 
-    # simple_symbol_list: simple_symbol COMMA simple_symbol_list | simple_symbol;
+    # simple_symbol_list: simple_symbol (COMMA simple_symbol)*;
     def visitSimple_symbol_list(self, ctx: CircomParser.Simple_symbol_listContext):
-        return [self.visit(ctx.simple_symbol())] + self.visit(
-            ctx.simple_symbol_list()) if ctx.simple_symbol_list() else [self.visit(ctx.simple_symbol())]
+        return [self.visit(symbol) for symbol in ctx.simple_symbol()]
 
     # complex_symbol: IDENTIFIER array_access_list ASSIGNMENT expression;
     def visitComplex_symbol(self, ctx: CircomParser.Complex_symbolContext):
@@ -319,10 +319,9 @@ class ASTGeneration(CircomVisitor):
     def visitSome_symbol(self, ctx: CircomParser.Some_symbolContext):
         return self.visit(ctx.getChild(0))
 
-    # some_symbol_list: some_symbol COMMA some_symbol_list | some_symbol;
+    # some_symbol_list: some_symbol (COMMA some_symbol)*;
     def visitSome_symbol_list(self, ctx: CircomParser.Some_symbol_listContext):
-        return [self.visit(ctx.some_symbol())] + self.visit(ctx.some_symbol_list()) if ctx.some_symbol_list() else [
-            self.visit(ctx.some_symbol())]
+        return [self.visit(symbol) for symbol in ctx.some_symbol()]
 
     # var_decl
     #     : VAR some_symbol_list
@@ -414,10 +413,9 @@ class ASTGeneration(CircomVisitor):
             ) else ctx.LEFT_CONSTRAINT().getText()
         return (name, dimensions, init, op)
 
-    # signal_symbol_list: signal_symbol COMMA signal_symbol_list | signal_symbol;
+    # signal_symbol_list: signal_symbol (COMMA signal_symbol)*;
     def visitSignal_symbol_list(self, ctx: CircomParser.Signal_symbol_listContext):
-        return [self.visit(ctx.signal_symbol())] + self.visit(
-            ctx.signal_symbol_list()) if ctx.signal_symbol_list() else [self.visit(ctx.signal_symbol())]
+        return [self.visit(symbol) for symbol in ctx.signal_symbol()]
 
     # component_decl
     #     : COMPONENT some_symbol_list
@@ -458,17 +456,17 @@ class ASTGeneration(CircomVisitor):
                            self.visit(ctx.array_access())) if ctx.array_access() else ComponentAccess(
             FileLocation(self.file_name, ctx.start, ctx.stop), self.visit(ctx.component_access()))
 
-    # var_access_list: var_access var_access_list | ;
+    # var_access_list: var_access*;
     def visitVar_access_list(self, ctx: CircomParser.Var_access_listContext):
-        return [self.visit(ctx.var_access())] + self.visit(ctx.var_access_list()) if ctx.getChildCount() == 2 else []
+        return [self.visit(access) for access in ctx.var_access()]
 
     # array_access: LB expression RB;
     def visitArray_access(self, ctx: CircomParser.Array_accessContext):
         return self.visit(ctx.expression())
 
-    # array_access_list: array_access array_access_list | ;
+    # array_access_list: array_access*;
     def visitArray_access_list(self, ctx: CircomParser.Array_access_listContext):
-        return [self.visit(ctx.array_access())] + self.visit(ctx.array_access_list()) if ctx.array_access() else []
+        return [self.visit(access) for access in ctx.array_access()]
 
     # component_access: DOT IDENTIFIER;
     def visitComponent_access(self, ctx: CircomParser.Component_accessContext):
@@ -640,13 +638,9 @@ class ASTGeneration(CircomVisitor):
         else:
             return self.visit(ctx.expression())
 
-    # twoElemsListable
-    #     : twoElemsListable COMMA expression
-    #     | expression COMMA expression
-    #     ;
+    # twoElemsListable: expression COMMA expression (COMMA expression)*;
     def visitTwoElemsListable(self, ctx: CircomParser.TwoElemsListableContext):
-        return self.visit(ctx.twoElemsListable()) + [self.visit(ctx.expression(0))] if ctx.twoElemsListable() else [
-            self.visit(ctx.expression(0)), self.visit(ctx.expression(1))]
+        return [self.visit(expression) for expression in ctx.expression()]
 
     # log_arguement: expression | STRING;
     def visitLog_arguement(self, ctx: CircomParser.Log_arguementContext):
@@ -654,38 +648,35 @@ class ASTGeneration(CircomVisitor):
                       self.visit(ctx.expression())) if ctx.expression() else LogStr(
             FileLocation(self.file_name, ctx.start, ctx.stop), ctx.STRING().getText())
 
-    # log_list: log_arguement COMMA log_list | log_arguement;
+    # log_list: log_arguement (COMMA log_arguement)*;
     def visitLog_list(self, ctx: CircomParser.Log_listContext):
-        return [self.visit(ctx.log_arguement())] + self.visit(ctx.log_list()) if ctx.log_list() else [
-            self.visit(ctx.log_arguement())]
+        return [self.visit(argument) for argument in ctx.log_arguement()]
 
     # listable: listable_prime | ;
     def visitListable(self, ctx: CircomParser.ListableContext):
         return self.visit(ctx.listable_prime()) if ctx.listable_prime() else []
 
-    # listable_prime: expression | expression COMMA listable_prime;
+    # listable_prime: expression (COMMA expression)*;
     def visitListable_prime(self, ctx: CircomParser.Listable_primeContext):
-        return [self.visit(ctx.expression())] + self.visit(ctx.listable_prime()) if ctx.listable_prime() else [
-            self.visit(ctx.expression())]
+        return [self.visit(expression) for expression in ctx.expression()]
 
     # listableAnon: listableAnon_prime | ;
     def visitListableAnon(self, ctx: CircomParser.ListableAnonContext):
         return self.visit(ctx.listableAnon_prime()) if ctx.listableAnon_prime() else []
 
     # listableAnon_prime: listable_prime | listableWithInputNames;
-    def visitListableAnon(self, ctx: CircomParser.ListableAnon_primeContext):
+    def visitListableAnon_prime(self, ctx: CircomParser.ListableAnon_primeContext):
         return list(map(lambda x: (x, None), self.visit(ctx.listable_prime()))) if ctx.listable_prime() else self.visit(
             ctx.listableWithInputNames())
 
     # listableWithInputNames
-    #     : listableWithInputNames COMMA IDENTIFIER assign_opcode expression
-    #     | IDENTIFIER assign_opcode expression
+    #     : IDENTIFIER assign_opcode expression (COMMA IDENTIFIER assign_opcode expression)*
     #     ;
 
     def visitListableWithInputNames(self, ctx: CircomParser.ListableWithInputNamesContext):
-        return self.visit(ctx.listableWithInputNames()) + [(self.visit(ctx.expression()), (
-        self.visit(ctx.assign_opcode()), ctx.IDENTIFIER().getText()))] if ctx.listableWithInputNames() else [
-            (self.visit(ctx.expression()), (self.visit(ctx.assign_opcode()), ctx.IDENTIFIER().getText()))]
+        return [(self.visit(expression), (self.visit(opcode), identifier.getText()))
+                for expression, opcode, identifier in
+                zip(ctx.expression(), ctx.assign_opcode(), ctx.IDENTIFIER())]
 
     # prefixOpcode: NOT | BNOT | SUB;
     def visitPrefixOpcode(self, ctx: CircomParser.PrefixOpcodeContext):

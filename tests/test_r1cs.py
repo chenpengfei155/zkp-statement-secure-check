@@ -18,13 +18,17 @@ from web_ui.r1cs_store import R1CSStore
 
 
 def circuit(count=1, prime=17, wire=1, coefficient=1, extra=(), version=1,
-            declared_count=None, duplicate=False):
+            declared_count=None, duplicate=False, wires=2, combinations=None):
     """A tiny independent fixture: w1 * w1 = w1, with sections out of order."""
     fs = 8 if prime < 2**64 else 32
     header = struct.pack('<I', fs) + prime.to_bytes(fs, 'little')
-    header += struct.pack('<IIIIQI', 2, 1, 0, 0, 2, count if declared_count is None else declared_count)
+    header += struct.pack('<IIIIQI', wires, 1, 0, 0, wires, count if declared_count is None else declared_count)
     term = struct.pack('<II', 1, wire) + coefficient.to_bytes(fs, 'little')
-    sections = [(2, term * 3 * count), (1, header), (3, struct.pack('<QQ', 0, 1)), *extra]
+    constraint = term * 3 if combinations is None else b''.join(
+        struct.pack('<I', len(terms)) + b''.join(
+            struct.pack('<I', index) + value.to_bytes(fs, 'little') for index, value in terms)
+        for terms in combinations)
+    sections = [(2, constraint * count), (1, header), (3, struct.pack('<' + 'Q' * wires, *range(wires))), *extra]
     if duplicate:
         sections.append((1, header))
     return b'r1cs' + struct.pack('<II', version, len(sections)) + b''.join(
@@ -81,6 +85,36 @@ class ParserTests(unittest.TestCase):
         struct.pack_into('<Q', data, 16, 2**63)
         with self.assertRaises(R1CSError):
             self.read(data)
+
+    def test_unsorted_unique_terms_preserve_equations_and_pagination(self):
+        combinations = [[(3, 5), (0, 1), (1, 2)], [(1, 1)], [(2, 3), (1, 1)]]
+        reader = self.read(circuit(wires=4, combinations=combinations, count=51))
+        page = reader.page(50)
+        streamed = list(reader.iter_constraints())
+        self.assertEqual(page['constraints'][0]['a'], [
+            {'wire': 0, 'coefficient': '1'}, {'wire': 1, 'coefficient': '2'},
+            {'wire': 3, 'coefficient': '5'}])
+        self.assertEqual(page['constraints'][0], streamed[50])
+        canonical = self.read(circuit(wires=4, count=51,
+                                      combinations=[sorted(terms) for terms in combinations]))
+        self.assertEqual(streamed, list(canonical.iter_constraints()))
+
+    def test_duplicate_indices_are_rejected_even_when_nonadjacent(self):
+        for terms in ([(1, 1), (1, 2)], [(2, 1), (1, 3), (2, 4)]):
+            with self.subTest(terms=terms), self.assertRaisesRegex(R1CSError, 'Duplicate variable index'):
+                self.read(circuit(wires=3, combinations=[terms, [], []]))
+
+    @unittest.skipUnless((ROOT / 'benchmarks/r1cs/aes-circom__mul_test.r1cs').exists(),
+                         'requires the bundled AES benchmark')
+    def test_aes_benchmark_unsorted_terms_are_read_without_modifying_file(self):
+        path = ROOT / 'benchmarks/r1cs/aes-circom__mul_test.r1cs'
+        original = path.read_bytes()
+        reader = R1CSFile(path)
+        self.assertEqual((reader.metadata['wires'], reader.metadata['constraints']), (12418, 12289))
+        terms = reader.page(4127, 1)['constraints'][0]['c']
+        self.assertEqual([term['wire'] for term in terms], sorted(term['wire'] for term in terms))
+        self.assertEqual(len(terms), 3)
+        self.assertEqual(path.read_bytes(), original)
 
     def test_page_bounds(self):
         reader = self.read(circuit())
@@ -144,6 +178,15 @@ class WebTests(unittest.TestCase):
             self.assertEqual(self.upload(data, name).status_code, 400)
         self.assertEqual(self.client.post('/upload').status_code, 400)
 
+    def test_unsorted_r1cs_upload_and_page(self):
+        data = circuit(wires=3, combinations=[[(2, 7), (0, 1)], [(1, 2)], []])
+        response = self.upload(data)
+        self.assertEqual(response.status_code, 200, response.json)
+        page = self.client.get(f"/r1cs/{response.json['id']}/constraints")
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.json['constraints'][0]['a'], [
+            {'wire': 0, 'coefficient': '1'}, {'wire': 2, 'coefficient': '7'}])
+
     def test_request_limit_is_json_413(self):
         with patch.dict(web.app.config, MAX_CONTENT_LENGTH=512):
             response = self.upload(b'x' * 1024)
@@ -161,11 +204,11 @@ class WebTests(unittest.TestCase):
 
     def test_circom_analysis_survives_late_stream_connection_and_cleans_temp(self):
         paths = []
-        original = web.detect
-        def record(path):
+        original = web.analyze_source
+        def record(path, **kwargs):
             paths.append(Path(path))
-            return original(path)
-        with patch.object(web, 'detect', side_effect=record):
+            return original(path, **kwargs)
+        with patch.object(web, 'analyze_source', side_effect=record):
             response = self.client.post('/analyze', json={'code': (ROOT / 'demo1.circom').read_text(encoding='utf-8')})
             session_id = response.json['session_id']
             thread = web.analysis_threads.get(session_id)
@@ -189,10 +232,15 @@ class WebTests(unittest.TestCase):
 
     def test_source_error_and_invalid_requests(self):
         self.assertEqual(self.client.post('/analyze', json={'code': ''}).status_code, 400)
-        with patch.object(web, 'detect', return_value=(None, None)):
-            session_id = self.client.post('/analyze', json={'code': 'invalid'}).json['session_id']
-            response = self.client.get(f'/progress/{session_id}', buffered=True)
-        self.assertIn('Analysis failed', response.get_data(as_text=True))
+        session_id = self.client.post('/analyze', json={'code': 'invalid'}).json['session_id']
+        response = self.client.get(f'/progress/{session_id}', buffered=True)
+        events = [json.loads(line[6:]) for line in response.get_data(as_text=True).splitlines()
+                  if line.startswith('data: ')]
+        report = next(event['report'] for event in events if event['type'] == 'complete')
+        self.assertEqual(report['verdict'], 'unknown')
+        self.assertEqual(report['reason'], 'syntax_error')
+        self.assertIsNone(report['warning_count'])
+        self.assertTrue(report['diagnostics'])
         self.assertNotIn(session_id, web.progress_queues)
 
     def test_folder_analysis_keeps_source_results(self):

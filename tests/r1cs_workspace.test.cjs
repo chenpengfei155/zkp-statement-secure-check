@@ -76,6 +76,7 @@ function harness() {
             return new Promise(resolve => requests.push({url, options, resolve}));
         },
     });
+    context.window = context;
     const js = fs.readFileSync(path.join(__dirname, '../web_ui/static/r1cs.js'), 'utf8');
     const html = fs.readFileSync(path.join(__dirname, '../web_ui/templates/index.html'), 'utf8');
     const inline = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace('{{ examples | tojson }}', '{}');
@@ -191,7 +192,8 @@ test('R1CS Analyze dispatches by id and preserves reports across tab switches wi
     assert.equal(result.querySelectorAll('.coverage-unavailable').length, 0);
     assert.equal(result.querySelector('h3').textContent, 'Analysis Result');
     const checkCards = result.querySelectorAll('.r1cs-check-card');
-    assert.equal(checkCards.length, 5);
+    assert.equal(checkCards.filter(card => !card.className.includes('is-time')).length, 5);
+    assert.equal(checkCards.filter(card => card.className.includes('is-time')).length, 1);
     assert.ok(checkCards.some(card => card.className.includes('is-success')));
     assert.equal(checkCards[0].querySelector('.r1cs-check-status').textContent, 'Clean');
     assert.match(result.querySelector('.r1cs-result-output').textContent, /\[Success\]\s+Output Uniqueness: Output uniqueness verified/);
@@ -247,9 +249,11 @@ test('Circom reports list successful and warning checks with expandable findings
     h.run(`renderCircomReport(document.getElementById('result'), ${JSON.stringify({
         kind: 'circom', filename: 'demo.circom', verdict: 'warning', warning_count: 1,
         checks: [
-            {name: 'Unused Signal', status: 'pass', count: 0, message: 'No findings.', findings: []},
-            {name: 'Data Flow / Constraint Discrepancy', status: 'warning', count: 1, message: 'Found 1 finding(s).',
+            {id: 'unused signal', name: 'Unused Signal', status: 'pass', count: 0, message: 'No findings.', findings: []},
+            {id: 'data flow constraint discrepancy', name: 'Data Flow / Constraint Discrepancy', status: 'warning', count: 1, message: 'Found 1 finding(s).',
                 findings: [{location: 'demo.circom:5:4', message: 'Constraint does not match dataflow.'}]},
+            ...['unconstrained_output', 'unconstrained component input', 'unused component output'].map(
+                id => ({id, name: id, status: 'pass', count: 0, message: 'No findings.', findings: []})),
         ],
     })})`);
     const result = h.document.getElementById('result');
@@ -260,6 +264,58 @@ test('Circom reports list successful and warning checks with expandable findings
     assert.equal(checkCards.filter(card => card.className.includes('is-warning')).length, 1);
     assert.equal(checkCards[1].querySelector('.r1cs-check-status').textContent, 'Review');
     assert.match(result.querySelector('summary').textContent, /Data Flow \/ Constraint Discrepancy: 1 finding/);
+});
+
+test('incomplete source reports never render success or zero findings', () => {
+    const h = harness();
+    h.context.incomplete = {kind: 'circom', status: 'incomplete', verdict: 'unknown',
+        warning_count: null, filename: 'broken.circom', reason: 'include_not_found',
+        message: 'A required include file is missing.', diagnostics: ['<script>missing.circom</script>'],
+        checks: [{name: 'Unused Signal', status: 'unknown', count: null, message: 'Not completed.'}]};
+    h.run("renderCircomReport(document.getElementById('result'), incomplete)");
+    const result = h.document.getElementById('result');
+    assert.match(result.className, /warning/);
+    assert.doesNotMatch(result.querySelector('.r1cs-result-output').textContent, /\[Success\]|Total warnings: 0/);
+    assert.match(result.querySelector('.r1cs-result-output').textContent, /Result: unknown/);
+    assert.equal(result.querySelector('.r1cs-check-status').textContent, 'Unknown');
+    assert.equal(result.querySelectorAll('script').length, 0);
+    assert.match(result.querySelector('details').querySelector('pre').textContent, /missing.circom/);
+    h.run("renderCircomReport(document.getElementById('result'), {checks: []})");
+    assert.doesNotMatch(result.className, /success/);
+});
+
+test('source cancellation stores an explicit inconclusive result', async () => {
+    const h = harness();
+    await h.open('source.circom', {kind: 'circom', content: 'original'});
+    const pending = h.run('analyze()');
+    h.run('stopAnalysis()');
+    const result = h.run("openFiles['source.circom'].result");
+    assert.equal(result.type, 'circom');
+    assert.equal(result.message.verdict, 'cancelled');
+    assert.equal(result.message.warning_count, null);
+    h.requests[0].resolve({ok: true, json: async () => ({session_id: 'late'})});
+    await pending;
+});
+
+test('folder dependencies accompany the selected source and preserve edits', async () => {
+    const h = harness();
+    await h.open('project/main.circom', {kind: 'circom', content: 'old'});
+    h.editor.setValue('edited');
+    h.run(`sourceFolderFiles = [
+        {name: 'main.circom', webkitRelativePath: 'project/main.circom', text: async () => 'old'},
+        {name: 'lib.circom', webkitRelativePath: 'project/lib.circom', text: async () => 'dependency'}
+    ]`);
+    const pending = h.run('analyze()');
+    await new Promise(resolve => setImmediate(resolve));
+    const request = h.requests.at(-1);
+    const body = JSON.parse(request.options.body);
+    assert.equal(body.code, 'edited');
+    assert.deepEqual(body.files, [
+        {path: 'project/main.circom', code: 'edited'},
+        {path: 'project/lib.circom', code: 'dependency'},
+    ]);
+    request.resolve({ok: true, json: async () => ({session_id: 'folder'})});
+    await pending;
 });
 
 test('Picus counterexamples preserve decimal strings, highlight differences and never fill missing values', async () => {

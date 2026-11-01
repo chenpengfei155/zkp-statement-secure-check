@@ -20,12 +20,12 @@ version: NUMBER '.' NUMBER '.' NUMBER ;
 main_option: main_component | ;
 
 definition_block: function_definition | template_definition;
-definition_list: definition_block definition_list | ;
+definition_list: definition_block*;
 
 pragma_definition: PRAGMA CIRCOM version SEMICOLON;
 custom_gate: PRAGMA CUSTOM_TEMPLATES SEMICOLON;
 
-include_list: include_definition include_list | ;
+include_list: include_definition*;
 include_definition: INCLUDE STRING SEMICOLON;
 
 // Definition
@@ -49,7 +49,7 @@ statement
     | if_statement
     | regular_statement
     ;
-statement_list: statement statement_list | ;
+statement_list: statement*;
 
 declaration_statement: declaration SEMICOLON;
 expression_statement: expression SEMICOLON;
@@ -107,16 +107,16 @@ declaration
     | component_decl
     ;
 
-identifier_list: IDENTIFIER COMMA identifier_list | IDENTIFIER;
+identifier_list: IDENTIFIER (COMMA IDENTIFIER)*;
 tag_list: LC identifier_list RC;
 
 tuple_initialization: assign_opcode expression;
 simple_symbol: IDENTIFIER array_access_list;
-simple_symbol_list: simple_symbol COMMA simple_symbol_list | simple_symbol;
+simple_symbol_list: simple_symbol (COMMA simple_symbol)*;
 complex_symbol: IDENTIFIER array_access_list ASSIGNMENT expression;
 
 some_symbol: simple_symbol | complex_symbol;
-some_symbol_list: some_symbol COMMA some_symbol_list | some_symbol;
+some_symbol_list: some_symbol (COMMA some_symbol)*;
 
 var_decl
     : VAR some_symbol_list
@@ -141,7 +141,7 @@ signal_symbol
     | IDENTIFIER array_access_list LEFT_CONSTRAINT expression
     | IDENTIFIER array_access_list LEFT_ASSIGNMENT expression
     ;
-signal_symbol_list: signal_symbol COMMA signal_symbol_list | signal_symbol;
+signal_symbol_list: signal_symbol (COMMA signal_symbol)*;
 
 component_decl
     : COMPONENT some_symbol_list
@@ -151,10 +151,10 @@ component_decl
 
 // Variable
 var_access: array_access | component_access;
-var_access_list: var_access var_access_list | ;
+var_access_list: var_access*;
 
 array_access: LB expression RB;
-array_access_list: array_access array_access_list | ;
+array_access_list: array_access*;
 component_access: DOT IDENTIFIER;
 
 variable: IDENTIFIER var_access_list;
@@ -227,21 +227,18 @@ expression14
     | LP expression RP
     ;
 
-twoElemsListable
-    : twoElemsListable COMMA expression
-    | expression COMMA expression
-    ;
+twoElemsListable: expression COMMA expression (COMMA expression)*;
 
 log_arguement: expression | STRING;
-log_list: log_arguement COMMA log_list | log_arguement;
+log_list: log_arguement (COMMA log_arguement)*;
 
 listable: listable_prime | ;
-listable_prime: expression | expression COMMA listable_prime;
+// Flat lists must not add parser or visitor stack depth per element.
+listable_prime: expression (COMMA expression)*;
 listableAnon: listableAnon_prime | ;
 listableAnon_prime: listable_prime | listableWithInputNames;
 listableWithInputNames
-    : listableWithInputNames COMMA IDENTIFIER assign_opcode expression
-    | IDENTIFIER assign_opcode expression
+    : IDENTIFIER assign_opcode expression (COMMA IDENTIFIER assign_opcode expression)*
     ;
 
 // Terminals

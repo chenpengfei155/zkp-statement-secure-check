@@ -54,8 +54,21 @@ troubleshooting, see [the Chinese web UI guide](../README.zh-CN.md#web-ui-usage)
 
 **Select Folder** loads `.circom` files into the file browser. Select a file to
 open it in the editor; the current **Analyze** button does not run a batch
-analysis of the folder. For circuits with relative `include` dependencies, use
-the CLI on the original file so the dependency paths are preserved.
+analysis of the folder. The selected file is sent together with the other source
+files in that folder, preserving relative `include` paths and current editor
+changes. Select the project folder containing both the entry and its libraries.
+
+Every accepted source analysis returns a report. Completed checks show findings
+or no findings; syntax errors, missing dependencies, resource limits and analyzer
+failures return `unknown`, with diagnostic details and no safety conclusion.
+Library files without `component main` return `not_applicable`. Cancellation
+returns `cancelled`. An incomplete result never means zero warnings or a pass.
+
+Source analyses run in separate processes with a default 150-second time limit.
+To change it, set `CIRVERIFY_SOURCE_TIMEOUT_SECONDS` before starting the server
+(for example, `$env:CIRVERIFY_SOURCE_TIMEOUT_SECONDS = "300"` in PowerShell).
+The `/analyze_folder` API returns one report per uploaded source file and continues
+after an individual file fails or times out.
 
 The web interface has no JSON download button. Use the
 [CLI examples](../README.md#example-usage) with `--json` to save a report.
@@ -92,8 +105,16 @@ It uses Circom's **Analysis Result** heading, light result panel and English
 `[Info]`, `[Success]` or `[Warning]` text output. Counterexamples appear below the
 summary; **Run details and raw logs** retains the original Picus output.
 Picus checks unique public outputs for identical public and private inputs and
-then uses `--strong` to include internal wires. cvc5 separately checks whether
-at least one satisfying assignment exists. Unsatisfiable systems skip uniqueness
+then uses `--strong` to include internal wires. Satisfiability separately checks
+whether at least one satisfying assignment exists. During the constraint scan,
+it first verifies the candidate `w0 = 1`, all other wires `0`, against every
+equation modulo the field prime. If all equations hold, the report records this
+verified witness and skips the standalone cvc5 query. A failed candidate does
+not imply unsatisfiability: it falls back to cvc5. The shortcut applies to the
+known BN254 prime and exactly verified primes up to 65,536; other moduli retain
+cvc5's field validation and solving. This existence check does not
+prove that every input has a solution or that outputs are unique.
+Unsatisfiable systems skip uniqueness
 checks. No public outputs skips only output uniqueness; the remaining checks
 run without a green overall pass. Counterexamples show wire numbers and two
 alternative outputs/internal values, with decimal strings preserving precision.
@@ -121,11 +142,14 @@ Set these **server-side environment variables** before starting Flask:
 | `CIRVERIFY_PICUS_QUERY_TIMEOUT_MS` | `5000` milliseconds per solver query |
 | `CIRVERIFY_PICUS_MEMORY_MIB` | `4096` per child process (Windows committed memory; Linux address space) |
 
-The 120-second budget covers the entire five-check task. The standalone cvc5
+The 120-second budget covers the entire five-check task. When needed, the standalone cvc5
 satisfiability query uses the same 5-second query limit (plus a two-second
 process watchdog allowance). Output uniqueness gets half the time remaining
 after that stage; strong mode gets the rest. Each stage uses a Windows Job Object
 or Linux process group so cancellation/timeout releases descendants and temporary files.
+`Satisfiability check timed out` means no conclusion was reached within this
+budget; it does not mean the constraints are inconsistent. Increasing the time
+limit may still be insufficient for large systems or may encounter the memory limit.
 
 The fixed Picus revision is `138b151d3a388e5b6c040c163e0a1db04f2ceda6`;
 cvc5 is built at `de62429fa7c03a46d5d75f9d78fc8888792a0798` with CoCoA.

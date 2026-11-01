@@ -17,6 +17,7 @@ from web_ui import app as web
 from web_ui.picus import PicusConfig, PicusEngine
 from web_ui.picus_runtime import picus_command
 from web_ui.picus_worker import environment
+from web_ui.r1cs_checks import CHECK_NAMES
 from web_ui.r1cs_store import R1CSStore
 from picus_fixtures import BN254, CONSTANT, SQUARE, r1cs
 
@@ -80,7 +81,8 @@ class RealPicusTests(unittest.TestCase):
             events = [json.loads(line[6:]) for line in stream.splitlines() if line.startswith('data: ')]
             report = next(event['result'] for event in events if event['type'] == 'complete')
             self.assertEqual(report['verdict'], 'safe', report)
-            self.assertEqual(len(report['checks']), 6)
+            self.assertEqual({check['id'] for check in report['checks']}, set(CHECK_NAMES))
+            self.assertEqual(len(report['checks']), len(CHECK_NAMES))
             self.assertTrue(all(check['status'] == 'pass' for check in report['checks']), report)
             client.delete('/r1cs/' + upload['id'])
         # Run the pinned artifact directly, independently of our supervisor.
@@ -92,6 +94,50 @@ class RealPicusTests(unittest.TestCase):
             **self.engine.process_options())
         self.assertEqual(probe.returncode, 8, probe.stdout + probe.stderr)
         self.assertIn('The circuit is properly constrained', probe.stdout)
+
+    def test_unsorted_terms_match_sorted_circuit(self):
+        # out = input + 1; the first linear combination stores w2 before w0.
+        rows = [({2: 1, 0: 1}, {0: 1}, {1: 1})]
+        results = []
+        for sort_terms in (True, False):
+            with self.subTest(sort_terms=sort_terms):
+                report = self.analyze(self.file(r1cs(rows, wires=3, private=1, sort_terms=sort_terms)))
+                self.assertEqual(report['verdict'], 'safe', report)
+                self.assertTrue(all(check['status'] == 'pass' for check in report['checks']), report)
+                results.append([(check['id'], check['status']) for check in report['checks']])
+        self.assertEqual(results[0], results[1])
+
+    def test_zero_witness_and_nonzero_solver_fallback(self):
+        for value in (0, 1):
+            with self.subTest(output=value):
+                # A unique output may be zero or nonzero; both are satisfiable.
+                rows = [({1: 1}, {0: 1}, {0: value})]
+                report = self.analyze(self.file(r1cs(rows, prime=17)))
+                checks = {item['id']: item for item in report['checks']}
+                self.assertEqual(report['verdict'], 'safe', report)
+                self.assertEqual(checks['satisfiability']['status'], 'pass')
+                if value == 0:
+                    self.assertEqual(checks['satisfiability']['method'], 'verified_zero_assignment')
+                    self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 1)
+                    self.assertNotIn('solver_result', checks['satisfiability'])
+                else:
+                    self.assertEqual(checks['satisfiability']['solver_result'], 'sat')
+                    self.assertNotIn('witness', checks['satisfiability'])
+
+    @unittest.skipUnless((ROOT / 'benchmarks/r1cs/aes-circom__mul_test.r1cs').is_file(),
+                         'requires the AES benchmark fixture')
+    def test_aes_satisfiability_uses_a_fully_verified_assignment(self):
+        reader = R1CSFile(ROOT / 'benchmarks/r1cs/aes-circom__mul_test.r1cs')
+        report = self.analyze(reader)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'safe', report)
+        self.assertEqual(set(checks), set(CHECK_NAMES))
+        self.assertTrue(all(check['status'] == 'pass' for check in checks.values()), report)
+        self.assertEqual(checks['satisfiability']['method'], 'verified_zero_assignment')
+        self.assertEqual(checks['satisfiability']['witness'],
+                         {'w0': '1', 'other_wires': '0',
+                          'constraints_verified': reader.metadata['constraints']})
+        self.assertNotIn('solver_result', checks['satisfiability'])
 
     def test_square_counterexample_satisfies_original_constraints(self):
         for prime in (BN254, 17):
@@ -111,6 +157,9 @@ class RealPicusTests(unittest.TestCase):
         self.assertEqual(report['verdict'], 'safe', report)
         report = self.analyze(self.file(r1cs(prime=17)))
         self.assertEqual(report['verdict'], 'unsafe', report)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 0)
 
     def test_internal_ambiguity_with_unique_output_and_valid_counterexample(self):
         # out = input, t^2 = 1. Inputs are fixed, output is unique, t is not.
@@ -146,6 +195,9 @@ class RealPicusTests(unittest.TestCase):
         self.assertEqual(checks['signal_uniqueness']['status'], 'warning', report)
         report = self.analyze(self.file(r1cs(wires=1, outputs=0, prime=17)))
         self.assertEqual(report['verdict'], 'not_applicable', report)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 0)
 
     def test_structural_advisories_do_not_change_unique_output_to_unsafe(self):
         report = self.analyze(self.file(r1cs(CONSTANT * 2 + [({}, {}, {})], prime=17)))
@@ -166,6 +218,23 @@ class RealPicusTests(unittest.TestCase):
                 self.assertTrue(flag.is_set(), report)
                 self.assertEqual(report['verdict'], 'cancelled', report)
                 self.assertEqual(self.artifacts(), before)
+
+    def test_cancel_after_zero_witness_preserves_completed_existence_proof(self):
+        before = self.artifacts()
+        flag = threading.Event()
+
+        def progress(event):
+            if event['message'].startswith('Output Uniqueness:'):
+                flag.set()
+
+        reader = self.file(r1cs([({1: 1}, {0: 1}, {})], prime=17))
+        report = self.analyze(reader, cancelled=flag.is_set, progress=progress)
+        self.assertTrue(flag.is_set(), report)
+        self.assertEqual(report['verdict'], 'cancelled', report)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        self.assertEqual(checks['satisfiability']['method'], 'verified_zero_assignment')
+        self.assertEqual(self.artifacts(), before)
 
     def test_timeout_preserves_completed_satisfiability_and_structural_checks(self):
         before = self.artifacts()

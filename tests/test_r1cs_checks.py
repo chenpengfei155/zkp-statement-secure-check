@@ -8,14 +8,14 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 from cirverify.r1cs import R1CSFile
 from web_ui.r1cs_checks import prepare_checks, aggregate, CHECK_NAMES, check_result
 from web_ui.picus_worker import SatisfiabilityOutput
-from picus_fixtures import r1cs
+from picus_fixtures import BN254, r1cs
 
 
 class StructuralTests(unittest.TestCase):
-    def scan(self, rows, **options):
+    def scan(self, rows, *, prime=17, **options):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'circuit.r1cs'
-            path.write_bytes(r1cs(rows, wires=4, prime=17))
+            path.write_bytes(r1cs(rows, wires=4, prime=prime))
             query = Path(directory) / 'query.smt2'
             checks = prepare_checks(R1CSFile(path), query, **options)
             return {item['id']: item for item in checks}, query.read_text()
@@ -41,8 +41,103 @@ class StructuralTests(unittest.TestCase):
 
     def test_budget_never_claims_complete_or_invents_unused_wires(self):
         checks, _ = self.scan([({1: 1, 2: 1}, {2: 1, 3: 1}, {})], row_limit=0)
-        self.assertTrue(all(item['status'] == 'unknown' for item in checks.values()))
+        for key in ('unused_wires', 'trivial_constraints'):
+            self.assertEqual(checks[key]['status'], 'unknown')
+            self.assertFalse(checks[key]['complete'])
         self.assertEqual(checks['unused_wires']['count'], 0)
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+
+    def test_zero_assignment_is_a_complete_concrete_witness(self):
+        rows = [({1: 1}, {0: 1}, {}), ({2: 1}, {3: 1}, {})]
+        checks, _ = self.scan(rows)
+        sat = checks['satisfiability']
+        self.assertEqual(sat['status'], 'pass')
+        self.assertEqual(sat['method'], 'verified_zero_assignment')
+        self.assertEqual(sat['witness'],
+                         {'w0': '1', 'other_wires': '0', 'constraints_verified': len(rows)})
+
+    def test_zero_assignment_keeps_constant_wire_equal_to_one(self):
+        for row in (
+            ({0: 1}, {0: 1}, {}),  # 1 * 1 = 0 is inconsistent.
+            ({1: 1}, {0: 1}, {0: 1}),  # out = 1 needs a nonzero witness.
+        ):
+            with self.subTest(row=row):
+                checks, _ = self.scan([row])
+                # Rejecting this candidate is not an unsatisfiability proof.
+                self.assertNotIn('satisfiability', checks)
+
+    def test_zero_assignment_uses_field_arithmetic(self):
+        for prime in (17, BN254):
+            with self.subTest(prime=prime):
+                checks, _ = self.scan([
+                    ({0: prime - 1, 1: 1}, {0: prime - 1}, {0: 1}),
+                ], prime=prime)  # (-1 + out) * -1 = 1 when out = 0.
+                self.assertEqual(checks['satisfiability']['status'], 'pass')
+                self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 1)
+
+    def test_unverified_field_moduli_require_solver_fallback(self):
+        # 15 is composite; 2**61 - 1 is prime but outside the known-prime fast path.
+        # Neither should acquire a finite-field conclusion from this candidate.
+        for prime in (15, 2**61 - 1):
+            with self.subTest(prime=prime):
+                checks, _ = self.scan([({1: 1}, {0: 1}, {})], prime=prime)
+                self.assertNotIn('satisfiability', checks)
+
+    def test_late_conflict_prevents_partial_zero_assignment_pass(self):
+        rows = [({1: 1}, {0: 1}, {})] * 128
+        rows.append(({0: 1}, {0: 1}, {}))
+        for options in ({}, {'row_limit': 0, 'expansion_limit': 0}):
+            with self.subTest(options=options):
+                checks, _ = self.scan(rows, **options)
+                self.assertNotIn('satisfiability', checks)
+
+    def test_structural_expansion_limits_do_not_skip_witness_validation(self):
+        rows = [({1: 1, 2: 1}, {2: 1, 3: 1}, {})]
+        for options in ({'row_limit': 0}, {'expansion_limit': 0}):
+            with self.subTest(options=options):
+                checks, _ = self.scan(rows, **options)
+                self.assertEqual(checks['satisfiability']['status'], 'pass')
+                self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 1)
+                self.assertFalse(checks['trivial_constraints']['complete'])
+
+    def test_witness_requires_scanned_count_to_match_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'circuit.r1cs'
+            path.write_bytes(r1cs([({1: 1}, {0: 1}, {})] * 2, prime=17))
+            reader = R1CSFile(path)
+            for declared in (1, 3):
+                with self.subTest(declared=declared):
+                    reader.metadata['constraints'] = declared
+                    checks = prepare_checks(reader, Path(directory) / 'query.smt2')
+                    self.assertNotIn('satisfiability', {item['id'] for item in checks})
+
+    def test_zero_constraints_have_an_assignment(self):
+        checks, _ = self.scan([])
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 0)
+        self.assertEqual(checks['unused_wires']['status'], 'warning')
+
+    def test_cancellation_after_valid_prefix_does_not_return_a_witness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'circuit.r1cs'
+            path.write_bytes(r1cs([({1: 1}, {0: 1}, {})] * 2, prime=17))
+            reader = R1CSFile(path)
+            original_rows = reader.iter_constraints
+            cancelled = False
+
+            def rows():
+                nonlocal cancelled
+                for row in original_rows():
+                    cancelled = row['index'] == 1
+                    yield row
+
+            def checkpoint():
+                if cancelled:
+                    raise InterruptedError('cancelled')
+
+            reader.iter_constraints = rows
+            with self.assertRaisesRegex(InterruptedError, 'cancelled'):
+                prepare_checks(reader, Path(directory) / 'query.smt2', checkpoint)
 
     def test_finding_display_cap_preserves_counts(self):
         checks, _ = self.scan([({}, {}, {})] * 105)
