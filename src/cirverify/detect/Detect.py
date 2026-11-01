@@ -12,6 +12,7 @@ class Detector:
     def __init__(self, graphs):
         self.graphs = graphs
         self.reports = {}
+        self.as_const = {}
 
     def detect(self):
         for graph in self.graphs.values():
@@ -48,9 +49,8 @@ class Detector:
     def unconstrainted_ouput(self, graph, node):
         if not node.is_signal_out():
             return False
-        constrainted_by_input = self.constrainted_by_input(graph, node)
-        constrainted_as_const = self.constrainted_as_const(graph, node)
-        return not (constrainted_by_input or constrainted_as_const)
+        return not (self.constrainted_by_input(graph, node)
+                    or self.constrainted_as_const(graph, node))
 
     def constrainted_by_input(self, graph, node):
         for n1 in graph.nodes.values():
@@ -61,38 +61,61 @@ class Detector:
         return False
 
     def constrainted_as_const(self, graph, node):
-        if node.id in self.as_const:
-            return self.as_const[node.id]
-        else:
-            self.as_const[node.id] = False
-        for edge in node.flow_to:
-            if edge.edge_type == EdgeType.CONSTRAINT and edge.count_constraint == 0:
-                if edge.node_to.node_type == NodeType.CONSTANT:
-                    self.as_const[node.id] = True
-                    return True
-        for edge in node.flow_from:
-            if edge.edge_type == EdgeType.CONSTRAINT:
-                node_from = edge.node_from
-                if node_from.node_type == NodeType.CONSTANT and edge.count_constraint == 0:
-                    self.as_const[node.id] = True
-                    return True
-                if node_from.node_type == NodeType.SIGNAL and node_from.signal_type == SignalType.INTERMEDIATE:
-                    if self.constrainted_as_const(graph, node_from):
-                        self.as_const[node.id] = True
-                        return True
-                node_from_component = node_from.component.split("|")[0]
-                if node_from_component != graph.name and node_from.is_signal_out():
-                    node_from_out_name = node_from.id.split(".")[-1]
-                    node_from_signal = self.graphs[node_from_component].nodes[node_from_out_name]
-                    component_graph = self.graphs[node_from_component]
-                    constrained_by_input = self.constrainted_by_input(
-                        component_graph, node_from_signal)
-                    constrained_as_const = self.constrainted_as_const(
-                        component_graph, node_from_signal)
-                    if constrained_by_input or constrained_as_const:
-                        self.as_const[node.id] = True
-                        return True
-        self.as_const[node.id] = False
+        # Graph identity is part of the key: separate templates often both have
+        # a node named "out", but their constraint evidence is independent.
+        root = (id(graph), node.id)
+        if root in self.as_const:
+            return self.as_const[root]
+        pending = [(graph, node)]
+        parents = {root: None}
+        while pending:
+            current_graph, current = pending.pop()
+            key = (id(current_graph), current.id)
+            if key in self.as_const:
+                found = self.as_const[key]
+                if not found:
+                    continue
+            else:
+                found = any(edge.edge_type == EdgeType.CONSTRAINT
+                            and edge.count_constraint == 0
+                            and edge.node_to.node_type == NodeType.CONSTANT
+                            for edge in current.flow_to)
+                successors = []
+                if not found:
+                    for edge in current.flow_from:
+                        if edge.edge_type != EdgeType.CONSTRAINT:
+                            continue
+                        source = edge.node_from
+                        if source.node_type == NodeType.CONSTANT and edge.count_constraint == 0:
+                            found = True
+                            break
+                        if source.is_signal() and source.signal_type == SignalType.INTERMEDIATE:
+                            successors.append((current_graph, source))
+                        component = source.component.split("|")[0]
+                        if component != current_graph.name and source.is_signal_out():
+                            child_graph = self.graphs[component]
+                            child_node = child_graph.nodes[source.id.split(".")[-1]]
+                            if self.constrainted_by_input(child_graph, child_node):
+                                found = True
+                                break
+                            successors.append((child_graph, child_node))
+                if not found:
+                    for successor_graph, successor in successors:
+                        successor_key = (id(successor_graph), successor.id)
+                        if successor_key not in parents:
+                            parents[successor_key] = key
+                            pending.append((successor_graph, successor))
+            if found:
+                # Only the actual path to evidence is proven. Other visited
+                # branches may be unconstrained, so do not mark them True.
+                while key is not None:
+                    self.as_const[key] = True
+                    key = parents[key]
+                return True
+        # Every reachable branch was exhausted. Delay negative caching until
+        # here so a cycle cannot hide evidence discovered through another edge.
+        for key in parents:
+            self.as_const[key] = False
         return False
 
     def is_constrainted(self, graph, node_a, node_b):

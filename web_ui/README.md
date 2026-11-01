@@ -110,9 +110,38 @@ whether at least one satisfying assignment exists. During the constraint scan,
 it first verifies the candidate `w0 = 1`, all other wires `0`, against every
 equation modulo the field prime. If all equations hold, the report records this
 verified witness and skips the standalone cvc5 query. A failed candidate does
-not imply unsatisfiability: it falls back to cvc5. The shortcut applies to the
-known BN254 prime and exactly verified primes up to 65,536; other moduli retain
-cvc5's field validation and solving. This existence check does not
+not imply unsatisfiability. It next tries input values of zero and one, propagates
+single-unknown linear equations, and reconstructs binary values where explicit Boolean
+constraints and distinct power-of-two weights permit it. This handles circuits
+whose internal wires must be nonzero even when their inputs are zero, such as
+`Sign`. Every resulting candidate is checked again against every original
+constraint before it can count as a pass. The report identifies whether the
+assignment was all-zero or constructed by propagation.
+If fixed seeds fail, the search can derive up to eight inputs that occur once
+in affine equations, individually or together, to satisfy commitment comparisons.
+The report lists those input wires; every original equation must still hold.
+
+The candidate search can also verify two complete assignments with identical
+inputs. If their outputs differ, output uniqueness fails with a verified
+counterexample; if only internal values differ, the all-signal check reports a
+finding. Those negative conclusions need no further solver search. Identical
+candidate outputs do not prove uniqueness: unresolved checks still use Picus.
+Each input seed is searched independently. A pair from a later seed can expose
+different outputs, but assignments with different inputs are never paired.
+
+A separate symbolic proof propagates equality between any two valid assignments
+with the same inputs. It uses nonzero constant linear coefficients and injective
+Boolean weighted sums whose integer range is smaller than the field prime.
+Unlike witness search, this proof never treats a sampled input as nonzero and
+never treats a modular bit decomposition as unique when it can wrap. A successful
+proof completes the corresponding uniqueness check; unproved checks retain Picus.
+
+Candidate construction uses a one-second budget checked between constraint
+processing steps, plus file-size, term-count, and work limits.
+A conflict, unsupported equation, or exhausted search budget
+falls back to the original unrestricted cvc5 query; none proves unsatisfiability.
+These shortcuts apply to the known BN254 prime and exactly verified primes up
+to 65,536; other moduli retain cvc5's field validation and solving. This existence check does not
 prove that every input has a solution or that outputs are unique.
 Unsatisfiable systems skip uniqueness
 checks. No public outputs skips only output uniqueness; the remaining checks
@@ -123,13 +152,14 @@ non-unique outputs produce `unsafe`, and inconsistent constraints produce
 `unsatisfiable`. `safe` requires all five checks to pass; `unknown` never counts
 as passing. These properties do not establish intended business functionality.
 
-Structural checks expand A*B-C modulo the file's modulus, eliminating zero
-coefficients and treating w0 as 1.
-Expansion is capped at 20,000 term operations per row and 1,000,000 per file;
-incomplete scans are marked partial/unknown, with at most 100 displayed findings
-per check.
-Large rows use conservative wire occurrence tracking to avoid false unused-wire
-findings. Counts include all findings discovered within the scan budget.
+Structural checks normalize A*B-C modulo the field, eliminating zero coefficients
+and treating w0 as 1. For the known prime fields, they compute effective variables
+and trivial constraints exactly in linear time without expanding every product.
+Other moduli retain the polynomial expansion fallback, capped at 20,000 term
+operations per row and 1,000,000 per file. Incomplete fallback scans are marked
+partial/unknown. At most 100 findings per check are displayed; counts include all
+findings discovered. Solver queries are written only when verified assignments
+did not already establish satisfiability.
 
 ### Picus configuration
 
@@ -150,6 +180,10 @@ or Linux process group so cancellation/timeout releases descendants and temporar
 `Satisfiability check timed out` means no conclusion was reached within this
 budget; it does not mean the constraints are inconsistent. Increasing the time
 limit may still be insufficient for large systems or may encounter the memory limit.
+Explicit solver out-of-memory diagnostics and worker `MemoryError` produce an
+`unknown` check with reason `memory_limit`, preserving diagnostics, exit codes
+and completed checks. They do not establish satisfiability or uniqueness.
+Other process failures and invalid solver responses remain errors.
 
 The fixed Picus revision is `138b151d3a388e5b6c040c163e0a1db04f2ceda6`;
 cvc5 is built at `de62429fa7c03a46d5d75f9d78fc8888792a0798` with CoCoA.

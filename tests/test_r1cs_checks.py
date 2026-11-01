@@ -2,11 +2,14 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import random
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 from cirverify.r1cs import R1CSFile
-from web_ui.r1cs_checks import prepare_checks, aggregate, CHECK_NAMES, check_result
+from web_ui.r1cs_checks import (prepare_checks, aggregate, CHECK_NAMES, check_result,
+                              write_satisfiability_query, _prime_field_structure, polynomial,
+                              verified_pair_uniqueness)
 from web_ui.picus_worker import SatisfiabilityOutput
 from picus_fixtures import BN254, r1cs
 
@@ -40,12 +43,25 @@ class StructuralTests(unittest.TestCase):
         self.assertEqual(checks['trivial_constraints']['findings'], [{'constraint': 0}])
 
     def test_budget_never_claims_complete_or_invents_unused_wires(self):
-        checks, _ = self.scan([({1: 1, 2: 1}, {2: 1, 3: 1}, {})], row_limit=0)
+        # Unknown field parameters retain the conservative expansion fallback.
+        checks, _ = self.scan([({1: 1, 2: 1}, {2: 1, 3: 1}, {})], prime=65537, row_limit=0)
         for key in ('unused_wires', 'trivial_constraints'):
             self.assertEqual(checks[key]['status'], 'unknown')
             self.assertFalse(checks[key]['complete'])
         self.assertEqual(checks['unused_wires']['count'], 0)
-        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        self.assertNotIn('satisfiability', checks)
+
+    def test_prime_field_structure_matches_full_polynomial_expansion(self):
+        rng = random.Random(4817)
+        for prime in (2, 17, BN254):
+            for _ in range(150):
+                parts = [{wire: coefficient for wire in range(6)
+                          if (coefficient := rng.choice((0, 0, 1, prime - 1, 2 % prime)))}
+                         for _ in range(3)]
+                expanded = polynomial(*parts, prime)
+                expected_wires = {wire for monomial in expanded for wire in monomial}
+                self.assertEqual(_prime_field_structure(*parts, prime),
+                                 (expected_wires, not expanded))
 
     def test_zero_assignment_is_a_complete_concrete_witness(self):
         rows = [({1: 1}, {0: 1}, {}), ({2: 1}, {3: 1}, {})]
@@ -91,14 +107,15 @@ class StructuralTests(unittest.TestCase):
                 checks, _ = self.scan(rows, **options)
                 self.assertNotIn('satisfiability', checks)
 
-    def test_structural_expansion_limits_do_not_skip_witness_validation(self):
+    def test_known_prime_checks_do_not_require_polynomial_expansion(self):
         rows = [({1: 1, 2: 1}, {2: 1, 3: 1}, {})]
         for options in ({'row_limit': 0}, {'expansion_limit': 0}):
             with self.subTest(options=options):
                 checks, _ = self.scan(rows, **options)
                 self.assertEqual(checks['satisfiability']['status'], 'pass')
                 self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 1)
-                self.assertFalse(checks['trivial_constraints']['complete'])
+                self.assertTrue(checks['trivial_constraints']['complete'])
+                self.assertTrue(checks['unused_wires']['complete'])
 
     def test_witness_requires_scanned_count_to_match_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -151,8 +168,54 @@ class StructuralTests(unittest.TestCase):
         with self.assertRaises(InterruptedError):
             self.scan([({}, {}, {})], checkpoint=cancelled)
 
+    def test_query_can_be_deferred_without_changing_fallback_constraints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'circuit.r1cs'
+            path.write_bytes(r1cs([({1: 1}, {1: 1}, {0: 4})], prime=17))
+            reader = R1CSFile(path)
+            checks = prepare_checks(reader)
+            self.assertNotIn('satisfiability', {c['id'] for c in checks})
+            self.assertEqual(list(Path(directory).glob('*.smt2')), [])
+            deferred, original = Path(directory) / 'deferred.smt2', Path(directory) / 'original.smt2'
+            write_satisfiability_query(reader, deferred)
+            prepare_checks(reader, original)
+            self.assertEqual(deferred.read_bytes(), original.read_bytes())
+
+    def test_large_r1cs_validation_can_be_cancelled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'circuit.r1cs'
+            path.write_bytes(r1cs([({1: 1}, {1: 1}, {0: 4})] * 1000, prime=17))
+            calls = 0
+            def checkpoint():
+                nonlocal calls
+                calls += 1
+                if calls == 5:
+                    raise InterruptedError('cancelled')
+            with self.assertRaisesRegex(InterruptedError, 'cancelled'):
+                R1CSFile(path, checkpoint=checkpoint)
+
 
 class SatisfiabilityTests(unittest.TestCase):
+    def test_verified_pairs_require_identical_inputs_and_identify_internal_ambiguity(self):
+        metadata = {'prime': '17', 'wires': 4, 'public_outputs': 1,
+                    'public_inputs': 0, 'private_inputs': 1, 'constraints': 0}
+        # Empty constraints make all these complete assignments valid witnesses.
+        witness = {'values': [1, 0, 2, 0], 'alternative_values': [1, 1, 2, 0],
+                   'constraints_verified': 0}
+        checks = verified_pair_uniqueness(metadata, witness)
+        self.assertEqual([(c['id'], c['status']) for c in checks],
+                         [('output_uniqueness', 'fail'), ('signal_uniqueness', 'warning')])
+        witness['alternative_values'] = [1, 1, 3, 0]
+        self.assertEqual(verified_pair_uniqueness(metadata, witness), [])
+        witness['alternative_values'] = [1, 0, 2, 1]
+        checks = verified_pair_uniqueness(metadata, witness)
+        self.assertEqual([(c['id'], c['status']) for c in checks], [('signal_uniqueness', 'warning')])
+        self.assertEqual(checks[0]['counterexample']['internal'], [{'wire': 3, 'first': '0', 'second': '1'}])
+        witness['alternative_values'] = witness['values'][:]
+        self.assertEqual(verified_pair_uniqueness(metadata, witness), [])
+        witness['alternative_values'] = [0, 1, 2, 1]
+        self.assertEqual(verified_pair_uniqueness(metadata, witness), [])
+
     def test_only_exact_successful_responses_are_conclusions(self):
         for response, expected in [('sat', 'pass'), ('unsat', 'fail'), ('unknown', 'unknown'),
                                     ('', 'error'), ('sat\nunsat', 'error'), ('(error "failed")', 'error')]:

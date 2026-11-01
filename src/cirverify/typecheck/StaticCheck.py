@@ -271,34 +271,51 @@ class TypeCheck(BaseVisitor):
                          "Main component not declared")
         self.visit(ast.main_component, param)
 
-    def visitIfThenElse(self, ast: IfThenElse, param):
-        if self.count_visited == 0:
-            self.visit(ast.if_case, param)
-            if ast.else_case:
-                self.visit(ast.else_case, param)
-                return
-        cond_type = self.visit(ast.cond, param)
+    def _visit_statement(self, statement, param):
+        # The first pass collects declarations and function return types only.
+        # A bare branch/loop body must follow the same rule as a braced block:
+        # component assignments have not been checked and their ports are not
+        # available yet. The second pass checks every statement normally.
+        if self.count_visited != 0 or isinstance(
+                statement, (InitializationBlock, Return, Block, IfThenElse, While)):
+            return self.visit(statement, param)
+
+    def _check_condition(self, condition, param):
+        cond_type = self.visit(condition, param)
+        if cond_type is None and self.in_function and isinstance(condition, Variable):
+            # A bare function parameter used as a condition is a scalar too.
+            self.infer_type(condition, param)
+            cond_type = self.visit(condition, param)
         if isinstance(cond_type, TemplateCircom):
-            raise Report(ReportType.ERROR, ast.cond.locate,
+            raise Report(ReportType.ERROR, condition.locate,
                          "Must be a single arithmetic expression. Found component")
         elif isinstance(cond_type, ArrayCircom):
-            raise Report(ReportType.ERROR, ast.cond.locate,
+            raise Report(ReportType.ERROR, condition.locate,
                          "Must be a single arithmetic expression. Found array")
+
+    def visitIfThenElse(self, ast: IfThenElse, param):
+        if self.count_visited == 0:
+            # Functions need argument types before collecting returns such as
+            # min(a, b): if (a < b) return a; return b. Templates still defer
+            # conditions until component assignments have been checked.
+            if self.in_function:
+                self._check_condition(ast.cond, param)
+            self._visit_statement(ast.if_case, param)
+            if ast.else_case:
+                self._visit_statement(ast.else_case, param)
+            return
+        self._check_condition(ast.cond, param)
         self.visit(ast.if_case, param)
         if ast.else_case:
             self.visit(ast.else_case, param)
 
     def visitWhile(self, ast: While, param):
         if self.count_visited == 0:
-            self.visit(ast.stmt, param)
+            if self.in_function:
+                self._check_condition(ast.cond, param)
+            self._visit_statement(ast.stmt, param)
             return
-        cond_type = self.visit(ast.cond, param)
-        if isinstance(cond_type, TemplateCircom):
-            raise Report(ReportType.ERROR, ast.cond.locate,
-                         "Must be a single arithmetic expression. Found component")
-        elif isinstance(cond_type, ArrayCircom):
-            raise Report(ReportType.ERROR, ast.cond.locate,
-                         "Must be a single arithmetic expression. Found array")
+        self._check_condition(ast.cond, param)
         self.loop_depth += 1
         try:
             self.visit(ast.stmt, param)
@@ -506,13 +523,7 @@ class TypeCheck(BaseVisitor):
         else:
             env = [{}] + param
         for stmt in ast.stmts:
-            if self.count_visited == 0:
-                if isinstance(stmt, InitializationBlock) or isinstance(stmt, Return) or isinstance(stmt,
-                                                                                                   Block) or isinstance(
-                        stmt, IfThenElse) or isinstance(stmt, While):
-                    self.visit(stmt, env)
-            else:
-                self.visit(stmt, env)
+            self._visit_statement(stmt, env)
 
     def visitAssert(self, ast: Assert, param):
         arg_type = self.visit(ast.arg, param)

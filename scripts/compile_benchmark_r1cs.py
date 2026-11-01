@@ -23,7 +23,8 @@ def main():
         source = SOURCE / item['entry']
         target = OUTPUT / (source.stem + '.r1cs')
         log = LOGS / (source.stem + '.log')
-        command = [str(COMPILER), str(source), '--r1cs', '--O1', '-o', str(OUTPUT)]
+        # Picus needs declared input wires to remain present, including aliases.
+        command = [str(COMPILER), str(source), '--r1cs', '--O0', '-o', str(OUTPUT)]
         started = time.monotonic()
         with log.open('w', encoding='utf-8') as stream:
             completed = subprocess.run(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT)
@@ -38,7 +39,7 @@ def main():
                   'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
                   'log': log.relative_to(ROOT).as_posix()}
         results.append(record)
-        report = {'compiler': version, 'flags': ['--r1cs', '--O1'],
+        report = {'compiler': version, 'flags': ['--r1cs', '--O0'],
                   'total': len(entries), 'processed': len(results),
                   'complete': index == len(entries),
                   'compiled': sum(r['status'] == 'compiled' for r in results),

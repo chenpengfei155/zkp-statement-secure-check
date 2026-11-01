@@ -18,9 +18,9 @@ from web_ui.r1cs_store import R1CSStore
 
 
 def circuit(count=1, prime=17, wire=1, coefficient=1, extra=(), version=1,
-            declared_count=None, duplicate=False, wires=2, combinations=None):
+            declared_count=None, duplicate=False, wires=2, combinations=None, field_size=None):
     """A tiny independent fixture: w1 * w1 = w1, with sections out of order."""
-    fs = 8 if prime < 2**64 else 32
+    fs = field_size if field_size is not None else 8 if prime < 2**64 else 32
     header = struct.pack('<I', fs) + prime.to_bytes(fs, 'little')
     header += struct.pack('<IIIIQI', wires, 1, 0, 0, wires, count if declared_count is None else declared_count)
     term = struct.pack('<II', 1, wire) + coefficient.to_bytes(fs, 'little')
@@ -103,6 +103,65 @@ class ParserTests(unittest.TestCase):
         for terms in ([(1, 1), (1, 2)], [(2, 1), (1, 3), (2, 4)]):
             with self.subTest(terms=terms), self.assertRaisesRegex(R1CSError, 'Duplicate variable index'):
                 self.read(circuit(wires=3, combinations=[terms, [], []]))
+
+    def test_long_combinations_keep_reads_bounded_and_preserve_sorting(self):
+        count = 8197
+        for width in (8, 32, 512):
+            with self.subTest(field_size=width):
+                combinations = [[(wire, wire % 17) for wire in reversed(range(count))], [], []]
+                sizes = []
+                original_read = R1CSFile._read
+
+                def track(stream, size, end):
+                    sizes.append(size)
+                    return original_read(stream, size, end)
+
+                with patch.object(R1CSFile, '_read', side_effect=track):
+                    reader = self.read(circuit(wires=count, combinations=combinations, field_size=width))
+                    page = reader.page()['constraints'][0]
+                    self.assertEqual(page, next(reader.iter_constraints()))
+                self.assertLessEqual(max(sizes), 4096 * (4 + width))
+                self.assertEqual(page['a'], [{'wire': wire, 'coefficient': str(wire % 17)}
+                                             for wire in range(count)])
+
+    def test_validation_rejects_invalid_terms_across_chunk_boundaries(self):
+        valid = [(wire, 1) for wire in range(4096)]
+        for final, message in (((0, 2), 'Duplicate variable index'),
+                               ((4098, 1), 'outside the valid range'),
+                               ((4096, 17), 'outside the field modulus')):
+            with self.subTest(final=final), self.assertRaisesRegex(R1CSError, message):
+                self.read(circuit(wires=4098, combinations=[valid + [final], [], []]))
+
+    def test_short_chunk_reads_and_section_crossings_are_rejected(self):
+        reader = self.read(circuit(wires=4098))
+        payload = struct.pack('<I', 4097) + b''.join(
+            struct.pack('<IQ', wire, 1) for wire in range(4097))
+        with self.assertRaisesRegex(R1CSError, 'Truncated R1CS file'):
+            reader._combination(BytesIO(payload[:-1]), len(payload), collect=False)
+        with self.assertRaisesRegex(R1CSError, 'Invalid number of terms'):
+            reader._combination(BytesIO(payload), len(payload) - 1, collect=False)
+
+    def test_cancellation_is_checked_within_and_before_reading_chunks(self):
+        reader = self.read(circuit(wires=8193))
+        payload = struct.pack('<I', 8192) + b''.join(
+            struct.pack('<IQ', wire, 1) for wire in range(8192))
+        for stop_at in (1, 2, 17):
+            with self.subTest(checkpoint=stop_at):
+                calls = 0
+
+                def checkpoint():
+                    nonlocal calls
+                    calls += 1
+                    if calls == stop_at:
+                        raise InterruptedError('cancelled')
+
+                reader._checkpoint = checkpoint
+                stream = BytesIO(payload)
+                with self.assertRaisesRegex(InterruptedError, 'cancelled'):
+                    reader._combination(stream, len(payload), collect=False)
+                self.assertEqual(calls, stop_at)
+                # Stop 17 is the start of block two; it must not read that block.
+                self.assertEqual(stream.tell(), 4 if stop_at == 1 else 4 + 4096 * 12)
 
     @unittest.skipUnless((ROOT / 'benchmarks/r1cs/aes-circom__mul_test.r1cs').exists(),
                          'requires the bundled AES benchmark')

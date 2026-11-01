@@ -25,7 +25,10 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 from cirverify.r1cs import R1CSFile
-from web_ui.r1cs_checks import CHECK_NAMES, aggregate, check_result, prepare_checks
+from web_ui.r1cs_checks import (CHECK_NAMES, aggregate, check_result, prepare_checks,
+                               write_satisfiability_query, verified_pair_uniqueness)
+from web_ui.r1cs_witness import find_verified_assignment
+from web_ui.r1cs_uniqueness import prove_uniqueness
 from web_ui.picus_runtime import REVISION, CVC5_REVISION, default_home, picus_command, solver_path, validate_runtime
 
 if os.name == 'nt':
@@ -35,6 +38,18 @@ else:
 
 SCOPE = 'Output/all-signal uniqueness, constraint satisfiability, and structural checks.'
 MAX_LINE = 65536
+
+
+def _memory_diagnostic(line):
+    """Recognize runtime diagnostics, never arbitrary mentions in circuit logs."""
+    return line.strip() in (
+        'out of memory',
+        'std::bad_alloc',
+        'what():  std::bad_alloc',
+        'what(): std::bad_alloc',
+        "terminate called after throwing an instance of 'std::bad_alloc'",
+        'libc++abi: terminating due to uncaught exception of type std::bad_alloc: std::bad_alloc',
+    )
 
 
 def emit(kind, **data):
@@ -105,6 +120,7 @@ class PicusOutput:
         self.log_count = 0
         self.invalid = False
         self.failed = False
+        self.memory_exhausted = False
         self.final = None
         self.section = None
         self.values = {name: {} for name in ('inputs', 'first possible outputs', 'second possible outputs',
@@ -120,6 +136,7 @@ class PicusOutput:
     def consume(self, line, stderr=False):
         if stderr:
             self.log('stderr: ' + line.rstrip())
+            self.memory_exhausted |= _memory_diagnostic(line)
             return
         try:
             event = json.loads(line)
@@ -166,6 +183,9 @@ class PicusOutput:
             verdict = 'unknown'
         elif reason == 'cancelled':
             verdict = 'cancelled'
+        elif (reason is None and self.memory_exhausted and not self.invalid
+              and (self.final is None or self.final == verdict or code not in (0, 8, 9))):
+            verdict, reason = 'unknown', 'memory_limit'
         elif verdict == 'error' or self.invalid or self.failed or self.final != verdict:
             bad_protocol = self.invalid or (code in (0, 8, 9) and self.final != verdict)
             verdict = 'error'
@@ -196,9 +216,12 @@ class SatisfiabilityOutput:
         self.lines = []
         self.logs = deque(maxlen=1000)
         self.invalid = False
+        self.memory_exhausted = False
 
     def consume(self, line, stderr=False):
         self.logs.append(('stderr: ' if stderr else '') + line.rstrip()[:1000])
+        if stderr:
+            self.memory_exhausted |= _memory_diagnostic(line)
         if not stderr and line.strip():
             if line.strip() not in ('sat', 'unsat', 'unknown') or self.lines:
                 self.invalid = True
@@ -214,6 +237,9 @@ class SatisfiabilityOutput:
         if reason in ('timeout', 'cancelled'):
             status = 'unknown' if reason == 'timeout' else 'cancelled'
             message = 'Satisfiability check timed out.' if reason == 'timeout' else 'Check cancelled.'
+        elif reason is None and self.memory_exhausted and not self.invalid:
+            status, reason = 'unknown', 'memory_limit'
+            message = 'The satisfiability solver exhausted available memory. See the run logs.'
         elif code != 0 or self.invalid:
             status, message = 'error', 'The cvc5 satisfiability check failed. See the run logs.'
         return check_result('satisfiability', status, message, solver_result=value,
@@ -346,13 +372,14 @@ def run(args):
     active = None
     last_tick = 0
     preparing = True
+    preparation_message = 'Scanning constraints and verifying the zero assignment'
     def checkpoint():
         nonlocal last_tick
         now = time.monotonic()
         if cancelled.is_set() or now >= deadline:
             raise InterruptedError('cancelled' if cancelled.is_set() else 'timeout')
         if preparing and now >= last_tick:
-            emit('progress', message='Scanning constraints and preparing satisfiability query',
+            emit('progress', message=preparation_message,
                  elapsed_seconds=round(now - started, 1))
             last_tick = now + 0.5
 
@@ -371,17 +398,58 @@ def run(args):
                 # Disposable Linux worker; Windows stages use Job Object limits.
                 memory = args.memory_mib * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
-            reader = R1CSFile(path)
+            reader = R1CSFile(path, checkpoint=checkpoint)
             no_outputs = not reader.metadata['public_outputs']
             if no_outputs:
                 checks['output_uniqueness'] = check_result('output_uniqueness', 'skipped',
                     'No public outputs to check.', reason='no_outputs')
             query_path = Path(job) / 'constraints.smt2'
-            for check in prepare_checks(reader, query_path, checkpoint):
+            for check in prepare_checks(reader, checkpoint=checkpoint):
                 checks[check['id']] = check
             preparing = False
             active = 'satisfiability'
+            if checks[active].get('reason') == 'not_started' or checks[active]['status'] == 'pass':
+                witness_started = time.monotonic()
+                emit('progress', message='Checking candidate assignments and possible counterexamples',
+                     elapsed_seconds=round(witness_started - started, 1))
+                witness = find_verified_assignment(reader, checkpoint, collect_alternative=True)
+                if witness is not None:
+                    witness_elapsed = time.monotonic() - witness_started
+                    if checks[active].get('reason') == 'not_started':
+                        checks[active] = check_result(
+                            active, 'pass',
+                            'At least one assignment satisfies all constraints: constructed a candidate and verified every equation.',
+                            method='verified_propagated_assignment', reason='completed',
+                            witness={'input_seed': None if witness['input_seed'] is None else str(witness['input_seed']),
+                                     'inputs_seeded': witness['inputs_seeded'],
+                                     'seeded_input_count': witness.get('seeded_input_count'),
+                                     'released_input_wires': witness.get('released_input_wires', []),
+                                     'unresolved_fill': str(witness['unresolved_fill']),
+                                     'constraints_verified': witness['constraints_verified'],
+                                     'nonzero_wires': sum(value != 0 for value in witness['values'][1:])},
+                            elapsed_seconds=round(witness_elapsed, 2))
+                    for check in verified_pair_uniqueness(reader.metadata, witness, witness_elapsed):
+                        checks[check['id']] = check
+            if any(checks[key].get('reason') == 'not_started' for key in ('output_uniqueness', 'signal_uniqueness')):
+                proof_started = time.monotonic()
+                emit('progress', message='Proving uniqueness by finite-field propagation',
+                     elapsed_seconds=round(proof_started - started, 1))
+                proof = prove_uniqueness(reader, checkpoint)
+                for key, proved in (('output_uniqueness', proof['output_unique']),
+                                    ('signal_uniqueness', proof['signal_unique'])):
+                    if proved and checks[key].get('reason') == 'not_started':
+                        checks[key] = check_result(
+                            key, 'pass', 'Output uniqueness verified by finite-field propagation.'
+                            if key == 'output_uniqueness' else
+                            'All signals are uniquely determined by the inputs (finite-field propagation).',
+                            method='verified_uniqueness_propagation', reason='completed',
+                            known_wires=proof['known_count'], proof_reason=proof['reason'],
+                            elapsed_seconds=round(time.monotonic() - proof_started, 2))
             if checks[active].get('reason') == 'not_started':
+                preparation_message = 'Preparing the unrestricted satisfiability query'
+                preparing = True
+                write_satisfiability_query(reader, query_path, checkpoint)
+                preparing = False
                 checks[active] = run_child(
                     [str(solver_path(prefix)), '--lang', 'smt2', f'--tlimit-per={args.query_timeout_ms}', str(query_path)],
                     SatisfiabilityOutput(), job, env, cancelled,
@@ -395,6 +463,8 @@ def run(args):
                 for strong in (False, True):
                     active = 'signal_uniqueness' if strong else 'output_uniqueness'
                     if not strong and no_outputs:
+                        continue
+                    if checks[active].get('method') in ('verified_witness_pair', 'verified_uniqueness_propagation'):
                         continue
                     checkpoint()
                     # Reserve half the remaining task budget for strong mode.
@@ -413,21 +483,33 @@ def run(args):
                         'error': 'Picus could not complete this check. See the run logs.',
                         'cancelled': 'Check cancelled.',
                     }
+                    if raw['reason'] == 'memory_limit':
+                        messages['unknown'] = 'Picus exhausted available memory before determining uniqueness. See the run logs.'
                     checks[active] = check_result(active, status, messages[status],
                         **{k: raw[k] for k in ('verdict', 'reason', 'elapsed_seconds', 'exit_code', 'counterexample', 'logs', 'logs_truncated')})
             active = None
             checkpoint()
         except (OSError, ValueError, MemoryError, subprocess.SubprocessError) as error:
             reason = str(error) if isinstance(error, InterruptedError) else 'runtime_error'
-            status = {'timeout': 'unknown', 'cancelled': 'cancelled'}.get(reason, 'error')
+            if isinstance(error, MemoryError):
+                reason = ('cancelled' if cancelled.is_set() else 'timeout'
+                          if time.monotonic() >= deadline else 'memory_limit')
+            status = {'timeout': 'unknown', 'cancelled': 'cancelled', 'memory_limit': 'unknown'}.get(reason, 'error')
             for key, check in checks.items():
-                if check.get('reason') == 'not_started' or key == active:
+                # Checks are published only after they finish. Optional helpers
+                # may run while active still names an already proved SAT check.
+                if check.get('reason') == 'not_started':
                     checks[key] = check_result(key, status,
                         'Task time limit reached.' if reason == 'timeout' else 'Check cancelled.' if reason == 'cancelled'
-                        else f'Analysis could not complete: {error}', reason=reason)
+                        else 'Analysis exhausted available memory.' if reason == 'memory_limit'
+                        else f'Analysis could not complete: {error}', reason=reason,
+                        **({'logs': [f'MemoryError: {error}']} if isinstance(error, MemoryError) else {}))
     # Emit the terminal result only after processes and temporary files are gone.
     results = list(checks.values())
     verdict, reason = aggregate(results, no_outputs)
+    if verdict == 'unknown' and reason == 'inconclusive_checks' and any(
+            check.get('reason') == 'memory_limit' for check in results):
+        reason = 'memory_limit'
     if cancelled.is_set():
         verdict, reason = 'cancelled', 'cancelled'
     logs = [f'[{item["name"]}] {line}' for item in results for line in item.get('logs', [])]

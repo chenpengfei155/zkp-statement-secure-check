@@ -19,6 +19,50 @@
 逐项耗时、超时删除记录和检测失败信息见 [`entries/timing_results.json`](entries/timing_results.json)。
 检测失败的入口保留；超时仅表示本机运行超过 150 秒，不代表电路有漏洞。
 
+R1CS 的唯一性检测需要保留输入线，重新编译请使用 `--r1cs --O0`。
+`scripts/compile_benchmark_r1cs.py` 已默认使用此参数；29 个因 `--O1` 优化而丢失
+输入布局的现有文件已从原入口重新生成。`r1cs/manifest.json` 中逐条 `flags`
+优先于顶层默认参数，其余文件仍保留原编译产物。本次原文件备份位于
+`build/benchmark-audit/original-o1/`，完整检测记录位于 `build/benchmark-audit/`。
+
+## 可重复的全目录检测
+
+当前 `entries/` 的 234 个 `.circom` 和 `r1cs/` 的 207 个 `.r1cs` 共计 **441 个检测输入**，
+源码与编译产物分别计数。这两个目录另外的 9 个清单、统计等元数据文件不作为电路输入检测。
+以下命令在包含 `.venv/`、`scripts/` 和 `web_ui/` 的项目根目录运行，使用已安装依赖的 Windows Python：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\audit_sources.py
+.\.venv\Scripts\python.exe .\scripts\audit_r1cs.py
+```
+
+两个脚本各自串行处理目录中的全部匹配文件。源码默认读取 `benchmarks/entries/`，输出到
+`build/source-audit/`，每个入口预算为 150 秒。R1CS 默认读取 `benchmarks/r1cs/`，输出到
+`build/r1cs-audit/`；原生引擎预算为 120 秒，单次求解查询预算为 5000 毫秒，完整校验加分析的
+外层预算为 420 秒，Windows 内存限制为每进程 4096 MiB。R1CS 检测需要已安装的 Picus/cvc5 原生运行时。
+
+输出目录中的 `progress.json` 表示当前进度，`summary.json` 汇总逐文件状态，`results/` 保存详细报告。
+再次运行相同命令会复用输入、实现及配置指纹匹配的报告；需要重新尝试未完成项时添加
+`--retry-incomplete`。R1CS 还核对实际运行时文件指纹，并在 `attempts/` 保留每次运行的证据及被替换的旧报告。
+输入目录可分别用 `--entries` 或 `--r1cs` 指定，输出目录均使用 `--output` 指定；完整参数见各脚本的 `--help`。
+
+在对应输出目录创建 `stop.request` 会请求取消当前子进程并停止该批次。恢复前删除此标记，再运行原命令。
+例如，停止并随后恢复 R1CS 批次：
+
+```powershell
+New-Item -ItemType File -Path .\build\r1cs-audit\stop.request -Force
+# 等待 progress.json 的 state 变为 stopped 后，准备恢复时执行：
+Remove-Item -LiteralPath .\build\r1cs-audit\stop.request
+.\.venv\Scripts\python.exe .\scripts\audit_r1cs.py
+```
+
+**全部文件已尝试（all attempted）不等于所有检查都有确定结论（all checks conclusive）。**
+`state: complete` 和退出码 0 表示本轮遍历结束；仍须查看逐项状态、原因，以及 R1CS 汇总中的
+`all_checks_complete`。只有所有适用检查完成，单项文件才记为 `completed`；发现真实问题也属于已完成检测，
+不等于安全通过。无输出或已证明不可满足时跳过不适用的唯一性检查，会明确记录原因。
+原始语法错误、格式错误、资源限制和求解器未决必须保留诊断；没有确定证明的检查继续显示 `UNKNOWN`，
+不能把超时、失败或部分完成的结果改写为通过，也不能通过删除样本来宣称全量通过。
+
 ## 文件夹与入口数量
 
 以下路径均相对于 `benchmarks/`。只统计各文件夹**直接包含的 `.circom` 文件**，

@@ -5,6 +5,7 @@ from Errors import *
 from AST import *
 from Report import Report, ReportType
 from StaticCheck import *
+from cirverify.utils.DependencySet import DependencySet
 
 # Define the prime modulus p used in Circom field arithmetic
 p = 21888242871839275222246405745257275088548364400416034343698204186575808495617
@@ -230,7 +231,7 @@ class CDGGeneration(BaseVisitor):
             arg_name += "[var0"
             param["node"][arg_name] = Node(
                 ast.locate, arg_name, NodeType.CONSTANT, None, graph_name)
-            param["expr"][arg_name] = set()
+            param["expr"][arg_name] = DependencySet()
         self.in_template = True
         self.visit(ast.body, param)
         self.in_template = False
@@ -246,8 +247,33 @@ class CDGGeneration(BaseVisitor):
     def visitIfThenElse(self, ast: IfThenElse, param):
         cond_type = self.visit(ast.cond, param).value
         if cond_type is None:
-            raise Report(ReportType.ERROR, ast.cond.locate,
-                         "Condition Type is None.")
+            # Witness-only scalar assignments can be represented exactly by a
+            # conditional expression. Do not merge constraints, declarations or
+            # components from unknown branches into an unconditional graph.
+            def assignment(statement):
+                while isinstance(statement, Block) and len(statement.stmts) == 1:
+                    statement = statement.stmts[0]
+                if (isinstance(statement, Substitution) and statement.op == "="
+                        and not statement.access):
+                    return statement
+                return None
+
+            when_true = assignment(ast.if_case)
+            when_false = assignment(ast.else_case) if ast.else_case else None
+            symbol = next((env[when_true.var] for env in param["env"]
+                           if when_true and when_true.var in env), None)
+            if (when_true is None or symbol is None or not isinstance(symbol.xtype, VarCircom)
+                    or isinstance(symbol.mtype, ArrayCircom)
+                    or (ast.else_case is not None and
+                        (when_false is None or when_false.var != when_true.var))):
+                raise Report(ReportType.ERROR, ast.cond.locate,
+                             "Signal-dependent conditional requires unsupported branch merging; "
+                             "only a single scalar variable assignment per branch is supported.")
+            otherwise = (when_false.rhe if when_false else
+                         Variable(when_true.locate, when_true.var, []))
+            merged = InlineSwitchOp(ast.locate, ast.cond, when_true.rhe, otherwise)
+            self.visit(Substitution(ast.locate, when_true.var, [], "=", merged), param)
+            return
         if cond_type:
             self.visit(ast.if_case, param)
         elif ast.else_case:
@@ -308,7 +334,7 @@ class CDGGeneration(BaseVisitor):
                 name += "[var0"
                 param["node"][name] = Node(
                     ast.locate, name, NodeType.CONSTANT, None, param["name"])
-                param["expr"][name] = set()
+                param["expr"][name] = DependencySet()
 
     def visitSubstitution(self, ast: Substitution, param):
         if ast.var == "_":
@@ -322,23 +348,25 @@ class CDGGeneration(BaseVisitor):
                 value = symbol.value
                 rhe_symbol = self.visit(ast.rhe, param)
                 rhe_value = rhe_symbol.value
-                if rhe_value is not None:
-                    if len(ast.access) > 0:
-                        for i in range(len(ast.access) - 1):
-                            access_val = self.visit(ast.access[i], param)
-                            value = value[access_val]
-                        last_access = self.visit(ast.access[-1], param)
-                        value[last_access] = rhe_value
-                    else:
-                        symbol.value = rhe_value
+                # Resolve RHS branches against the old value of the destination.
+                # Unknown assignments must also invalidate any previous constant.
+                if not self.in_function:
+                    contains = FindNode(self).visit(ast.rhe, param)
+                if len(ast.access) > 0:
+                    for i in range(len(ast.access) - 1):
+                        access_val = self.visit(ast.access[i], param)
+                        value = value[access_val]
+                    last_access = self.visit(ast.access[-1], param)
+                    value[last_access] = rhe_value
+                else:
+                    symbol.value = rhe_value
                 if self.in_function:
                     return
                 edge_type = EdgeType.DEPEND
-                contains = FindNode().visit(ast.rhe, param)
                 lhe = Variable(ast.locate, ast.var, ast.access)
                 mtype = TypeCheck(ast).visit(lhe, param["env"])
                 if not isinstance(mtype, ArrayCircom):
-                    lhe_var = FindNode().visit(lhe, param)[0]
+                    lhe_var = FindNode(self).visit(lhe, param)[0]
                     param["var"][lhe_var] += 1
                     name = self.visit(lhe, param).name
                     for fNode in contains:
@@ -358,9 +386,9 @@ class CDGGeneration(BaseVisitor):
                             if fNode in param["expr"]:
                                 param["expr"][name] = param["expr"][name] | param["expr"][fNode]
                             else:
-                                param["expr"][name].add(fNode)
+                                param["expr"][name] = param["expr"][name].with_item(fNode)
                 else:
-                    lhe_array = FindNode().visit(lhe, param)[0]
+                    lhe_array = FindNode(self).visit(lhe, param)[0]
                     lhe_vars = []
                     for var in param["var"].keys():
                         if lhe_array == var[:len(lhe_array)]:
@@ -373,7 +401,7 @@ class CDGGeneration(BaseVisitor):
                             if name not in param["node"]:
                                 param["node"][name] = Node(
                                     ast.locate, name, NodeType.CONSTANT, None, param["name"])
-                                param["expr"][name] = set()
+                                param["expr"][name] = DependencySet()
                             for fNode in contains:
                                 if fNode in param["var"]:
                                     if fNode == name.split("[var")[0]:
@@ -396,7 +424,7 @@ class CDGGeneration(BaseVisitor):
                                     if fNode in param["expr"]:
                                         param["expr"][name] = param["expr"][name] | param["expr"][fNode]
                                     else:
-                                        param["expr"][name].add(fNode)
+                                        param["expr"][name] = param["expr"][name].with_item(fNode)
                     elif isinstance(ast.rhe, Variable):
                         for lhe_var in lhe_vars:
                             param["var"][lhe_var] += 1
@@ -405,7 +433,7 @@ class CDGGeneration(BaseVisitor):
                             if name not in param["node"]:
                                 param["node"][name] = Node(
                                     ast.locate, name, NodeType.CONSTANT, None, param["name"])
-                                param["expr"][name] = set()
+                                param["expr"][name] = DependencySet()
                             fNode = contains[0] + lhe_var[len(lhe_array):]
                             if fNode in param["var"]:
                                 fNode += "[var" + str(param["var"][fNode])
@@ -429,7 +457,7 @@ class CDGGeneration(BaseVisitor):
                                 if fNode in param["expr"]:
                                     param["expr"][name] = param["expr"][name] | param["expr"][fNode]
                                 else:
-                                    param["expr"][name].add(fNode)
+                                    param["expr"][name] = param["expr"][name].with_item(fNode)
             elif isinstance(symbol.xtype, ComponentCircom):
                 template_type, args = self.visit(ast.rhe, param)
                 value = symbol.value
@@ -479,7 +507,7 @@ class CDGGeneration(BaseVisitor):
             lhe = Variable(ast.locate, ast.var, ast.access)
             name = self.visit(lhe, param).name
             self.visit(ast.rhe, param)
-            contains = FindNode().visit(ast.rhe, param)
+            contains = FindNode(self).visit(ast.rhe, param)
             if "--" in ast.op:
                 for fNode in contains:
                     if fNode in param["var"]:
@@ -557,7 +585,7 @@ class CDGGeneration(BaseVisitor):
     def visitConstraintEquality(self, ast: ConstraintEquality, param):
         self.visit(ast.lhe, param)
         self.visit(ast.rhe, param)
-        find_node = FindNode()
+        find_node = FindNode(self)
         lhe_node = find_node.visit(ast.lhe, param)
         rhe_node = find_node.visit(ast.rhe, param)
         nodes_list = lhe_node + rhe_node
@@ -572,8 +600,11 @@ class CDGGeneration(BaseVisitor):
                 if lnode == rnode:
                     continue
                 if lnode in param["expr"] and rnode in param["expr"]:
+                    # Expand the shared right-hand DAG once for this Cartesian
+                    # product, without caching every historical SSA leaf set.
+                    right_dependencies = tuple(param["expr"][rnode])
                     for add_l in param["expr"][lnode]:
-                        for add_r in param["expr"][rnode]:
+                        for add_r in right_dependencies:
                             cons_1 = self.getEdgeName(
                                 EdgeType.CONSTRAINT, add_l, add_r)
                             if cons_1 not in param["edge"]:
@@ -758,7 +789,6 @@ class CDGGeneration(BaseVisitor):
 
     def visitInlineSwitchOp(self, ast: InlineSwitchOp, param):
         cond_val = self.visit(ast.cond, param).value
-        FindNode.switch_op = cond_val
         if cond_val is None:
             return Symbol("", PrimeField(), None, ast, None)
         if cond_val:
@@ -798,7 +828,7 @@ class CDGGeneration(BaseVisitor):
             if name not in param["node"]:
                 param["node"][name] = Node(
                     ast.locate, name, NodeType.CONSTANT, None, param["name"])
-                param["expr"][name] = set()
+                param["expr"][name] = DependencySet()
             return Symbol(name, var_type, VarCircom(), ast, value)
         elif isinstance(symbol.xtype, ComponentCircom):
             template_name = None
@@ -947,7 +977,9 @@ class CDGGeneration(BaseVisitor):
 # Help Class to find Node in Expression
 class FindNode(BaseVisitor):
     node_number = 0
-    switch_op = None
+
+    def __init__(self, evaluator):
+        self.evaluator = evaluator
 
     def visitInfixOp(self, ast: InfixOp, param):
         return self.visit(ast.lhe, param) + self.visit(ast.rhe, param)
@@ -957,11 +989,12 @@ class FindNode(BaseVisitor):
 
     def visitInlineSwitchOp(self, ast: InlineSwitchOp, param):
         cond = self.visit(ast.cond, param)
-        if FindNode.switch_op is None:
-            return cond
-        elif FindNode.switch_op == True:
+        condition_value = self.evaluator.visit(ast.cond, param).value
+        if condition_value is None:
+            return cond + self.visit(ast.if_true, param) + self.visit(ast.if_false, param)
+        elif condition_value:
             return cond + self.visit(ast.if_true, param)
-        elif FindNode.switch_op == False:
+        else:
             return cond + self.visit(ast.if_false, param)
 
     def visitParrallelOp(self, ast: ParallelOp, param):

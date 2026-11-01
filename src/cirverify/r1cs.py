@@ -12,7 +12,9 @@ class R1CSError(ValueError):
 class R1CSFile:
     """Validated metadata and byte offsets; constraints are loaded only on demand."""
 
-    def __init__(self, path):
+    def __init__(self, path, checkpoint=lambda: None):
+        self._checkpoint = checkpoint
+        checkpoint()
         self.path = Path(path)
         self.size = self.path.stat().st_size
         self.offsets = array('Q')
@@ -61,6 +63,7 @@ class R1CSFile:
         self.field_size = self._uint32(stream, end)
         if not 8 <= self.field_size <= 512 or self.field_size % 8:
             raise R1CSError('Unsupported field size (expected a multiple of 8, up to 512 bytes).')
+        self._term_record = struct.Struct(f'<I{self.field_size}s')
         self.prime = int.from_bytes(self._read(stream, self.field_size, end), 'little')
         if self.prime < 2:
             raise R1CSError('Invalid field modulus.')
@@ -82,6 +85,8 @@ class R1CSFile:
             raise R1CSError('Constraint count exceeds the constraint section size.')
         self.constraints_end = end
         for _ in range(constraints):
+            if _ % 256 == 0:
+                self._checkpoint()
             self.offsets.append(stream.tell())
             for _ in range(3):
                 self._combination(stream, end, collect=False)
@@ -93,28 +98,37 @@ class R1CSFile:
             raise R1CSError('Wire map size does not match the number of variables.')
         stream.seek(start)
         for wire in range(wires):
+            if wire % 4096 == 0:
+                self._checkpoint()
             label, = struct.unpack('<Q', self._read(stream, 8, end))
             if label >= labels or (wire == 0 and label != 0):
                 raise R1CSError('Invalid label in the R1CS wire map.')
 
     def _combination(self, stream, end, collect):
         count = self._uint32(stream, end)
-        if count > (end - stream.tell()) // (4 + self.field_size):
+        record = self._term_record
+        if count > (end - stream.tell()) // record.size:
             raise R1CSError('Invalid number of terms in a constraint.')
         terms = [] if collect else None
         seen = set()
-        for _ in range(count):
-            wire = self._uint32(stream, end)
-            coefficient = int.from_bytes(self._read(stream, self.field_size, end), 'little')
-            if wire >= self.wires:
-                raise R1CSError(f'Constraint variable index {wire} is outside the valid range 0..{self.wires - 1}.')
-            if wire in seen:
-                raise R1CSError(f'Duplicate variable index {wire} in a constraint linear combination.')
-            if coefficient >= self.prime:
-                raise R1CSError('Constraint coefficient is outside the field modulus.')
-            seen.add(wire)
-            if collect:
-                terms.append({'wire': wire, 'coefficient': str(coefficient)})
+        for start in range(0, count, 4096):
+            self._checkpoint()
+            # Keep the read buffer bounded even for a very long combination.
+            # Decode each block without two read/tell calls for every term.
+            payload = self._read(stream, min(4096, count - start) * record.size, end)
+            for index, (wire, encoded) in enumerate(record.iter_unpack(payload)):
+                if index and index % 256 == 0:
+                    self._checkpoint()
+                coefficient = int.from_bytes(encoded, 'little')
+                if wire >= self.wires:
+                    raise R1CSError(f'Constraint variable index {wire} is outside the valid range 0..{self.wires - 1}.')
+                if wire in seen:
+                    raise R1CSError(f'Duplicate variable index {wire} in a constraint linear combination.')
+                if coefficient >= self.prime:
+                    raise R1CSError('Constraint coefficient is outside the field modulus.')
+                seen.add(wire)
+                if collect:
+                    terms.append({'wire': wire, 'coefficient': str(coefficient)})
         if collect:
             # The format specifies ascending indices, but some producers emit
             # unsorted sparse terms. Reorder whole pairs without changing A/B/C.

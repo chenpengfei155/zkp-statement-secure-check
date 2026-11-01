@@ -107,7 +107,7 @@ class RealPicusTests(unittest.TestCase):
                 results.append([(check['id'], check['status']) for check in report['checks']])
         self.assertEqual(results[0], results[1])
 
-    def test_zero_witness_and_nonzero_solver_fallback(self):
+    def test_zero_and_propagated_witnesses(self):
         for value in (0, 1):
             with self.subTest(output=value):
                 # A unique output may be zero or nonzero; both are satisfiable.
@@ -121,8 +121,33 @@ class RealPicusTests(unittest.TestCase):
                     self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 1)
                     self.assertNotIn('solver_result', checks['satisfiability'])
                 else:
-                    self.assertEqual(checks['satisfiability']['solver_result'], 'sat')
-                    self.assertNotIn('witness', checks['satisfiability'])
+                    self.assertEqual(checks['satisfiability']['method'], 'verified_propagated_assignment')
+                    self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 1)
+                    self.assertNotIn('solver_result', checks['satisfiability'])
+
+    def test_candidate_failure_keeps_the_unrestricted_solver_fallback(self):
+        # Neither uniform completion 0 nor 1 solves out^2 = 4; +/-2 do.
+        reader = self.file(r1cs([({1: 1}, {1: 1}, {0: 4})], prime=17))
+        report = self.analyze(reader)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'unsafe', report)
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        self.assertEqual(checks['satisfiability']['solver_result'], 'sat')
+        self.assertNotIn('witness', checks['satisfiability'])
+
+    @unittest.skipUnless((ROOT / 'benchmarks/r1cs/ed25519-099d19c__binadd2.r1cs').is_file(),
+                         'requires the BinAdd benchmark fixture')
+    def test_binadd_returns_a_verified_counterexample_instead_of_timing_out(self):
+        reader = R1CSFile(ROOT / 'benchmarks/r1cs/ed25519-099d19c__binadd2.r1cs')
+        report = self.analyze(reader)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'unsafe', report)
+        self.assertEqual(checks['satisfiability']['status'], 'pass')
+        for key in ('output_uniqueness', 'signal_uniqueness'):
+            self.assertEqual(checks[key]['method'], 'verified_witness_pair')
+            self.assertEqual(checks[key]['reason'], 'verified_counterexample')
+        self.assertTrue(checks['output_uniqueness']['counterexample']['outputs'])
+        self.assertTrue(all(c['status'] in ('pass', 'fail', 'warning') for c in checks.values()))
 
     @unittest.skipUnless((ROOT / 'benchmarks/r1cs/aes-circom__mul_test.r1cs').is_file(),
                          'requires the AES benchmark fixture')
@@ -138,6 +163,31 @@ class RealPicusTests(unittest.TestCase):
                          {'w0': '1', 'other_wires': '0',
                           'constraints_verified': reader.metadata['constraints']})
         self.assertNotIn('solver_result', checks['satisfiability'])
+
+    @unittest.skipUnless((ROOT / 'benchmarks/r1cs/circomlib-cff5ab6__Sign@sign.r1cs').is_file(),
+                         'requires the Sign benchmark fixture')
+    def test_sign_satisfiability_uses_propagation_and_full_verification(self):
+        reader = R1CSFile(ROOT / 'benchmarks/r1cs/circomlib-cff5ab6__Sign@sign.r1cs')
+        report = self.analyze(reader)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'safe', report)
+        self.assertEqual(set(checks), set(CHECK_NAMES))
+        self.assertTrue(all(check['status'] == 'pass' for check in checks.values()), report)
+        self.assertEqual(checks['satisfiability']['method'], 'verified_propagated_assignment')
+        self.assertEqual(checks['satisfiability']['witness']['constraints_verified'], 264)
+        self.assertNotIn('solver_result', checks['satisfiability'])
+
+    @unittest.skipUnless((ROOT / 'benchmarks/r1cs/circomlib-cff5ab6__AliasCheck@aliascheck.r1cs').is_file(),
+                         'requires the AliasCheck benchmark fixture')
+    def test_alias_check_uses_a_symbolic_uniqueness_proof(self):
+        reader = R1CSFile(ROOT / 'benchmarks/r1cs/circomlib-cff5ab6__AliasCheck@aliascheck.r1cs')
+        report = self.analyze(reader)
+        checks = {item['id']: item for item in report['checks']}
+        self.assertEqual(report['verdict'], 'not_applicable', report)
+        self.assertEqual(checks['output_uniqueness']['reason'], 'no_outputs')
+        self.assertEqual(checks['signal_uniqueness']['status'], 'pass')
+        self.assertEqual(checks['signal_uniqueness']['method'], 'verified_uniqueness_propagation')
+        self.assertEqual(checks['signal_uniqueness']['known_wires'], reader.wires)
 
     def test_square_counterexample_satisfies_original_constraints(self):
         for prime in (BN254, 17):
@@ -214,31 +264,38 @@ class RealPicusTests(unittest.TestCase):
                 def progress(event):
                     if event['message'].startswith(stage):
                         flag.set()
-                report = self.analyze(self.file(r1cs(SQUARE, prime=17)), cancelled=flag.is_set, progress=progress)
+                rows = [({1: 1}, {1: 1}, {0: 4})]  # Keep the actual SAT solver stage.
+                report = self.analyze(self.file(r1cs(rows, prime=17)), cancelled=flag.is_set, progress=progress)
                 self.assertTrue(flag.is_set(), report)
                 self.assertEqual(report['verdict'], 'cancelled', report)
                 self.assertEqual(self.artifacts(), before)
 
-    def test_cancel_after_zero_witness_preserves_completed_existence_proof(self):
+    def test_cancel_after_verified_witness_preserves_completed_existence_proof(self):
         before = self.artifacts()
-        flag = threading.Event()
+        for value, method in ((0, 'verified_zero_assignment'), (1, 'verified_propagated_assignment')):
+            with self.subTest(method=method):
+                flag = threading.Event()
 
-        def progress(event):
-            if event['message'].startswith('Output Uniqueness:'):
-                flag.set()
+                def progress(event):
+                    if event['message'].startswith('Output Uniqueness:'):
+                        flag.set()
 
-        reader = self.file(r1cs([({1: 1}, {0: 1}, {})], prime=17))
-        report = self.analyze(reader, cancelled=flag.is_set, progress=progress)
-        self.assertTrue(flag.is_set(), report)
-        self.assertEqual(report['verdict'], 'cancelled', report)
-        checks = {item['id']: item for item in report['checks']}
-        self.assertEqual(checks['satisfiability']['status'], 'pass')
-        self.assertEqual(checks['satisfiability']['method'], 'verified_zero_assignment')
-        self.assertEqual(self.artifacts(), before)
+                # A coupled linear system keeps a real Picus stage: the bounded
+                # proof intentionally does not perform Gaussian elimination.
+                rows = [({}, {}, {1: 1, 2: 1}), ({}, {}, {1: 1, 2: -1}),
+                        ({3: 1}, {0: 1}, {0: value})]
+                reader = self.file(r1cs(rows, prime=17, wires=4))
+                report = self.analyze(reader, cancelled=flag.is_set, progress=progress)
+                self.assertTrue(flag.is_set(), report)
+                self.assertEqual(report['verdict'], 'cancelled', report)
+                checks = {item['id']: item for item in report['checks']}
+                self.assertEqual(checks['satisfiability']['status'], 'pass')
+                self.assertEqual(checks['satisfiability']['method'], method)
+                self.assertEqual(self.artifacts(), before)
 
     def test_timeout_preserves_completed_satisfiability_and_structural_checks(self):
         before = self.artifacts()
-        engine = PicusEngine(PicusConfig(timeout_seconds=0.35))
+        engine = PicusEngine(PicusConfig(home=self.engine.config.home, timeout_seconds=0.35))
         report = self.analyze(self.file(r1cs(SQUARE, prime=17)), engine=engine)
         checks = {item['id']: item for item in report['checks']}
         self.assertEqual(report['verdict'], 'unknown', report)
@@ -250,7 +307,7 @@ class RealPicusTests(unittest.TestCase):
     def test_timeout_cancel_and_parent_eof_reap_processes(self):
         before = self.artifacts()
         reader = self.file(r1cs(SQUARE * 5000))
-        tiny = PicusEngine(PicusConfig(timeout_seconds=0.01))
+        tiny = PicusEngine(PicusConfig(home=self.engine.config.home, timeout_seconds=0.01))
         report = self.analyze(reader, engine=tiny)
         self.assertEqual((report['verdict'], report['reason']), ('unknown', 'timeout'), report)
         flag = threading.Event()
