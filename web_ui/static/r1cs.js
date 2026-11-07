@@ -1,3 +1,11 @@
+/* Presentation branding only: preserve the original backend reports and logs. */
+function verifierDisplayText(value) {
+    return String(value ?? '')
+        .replace(/(?:scripts[\\/])?setup_picus\.(?:ps1|sh)/gi,
+            'the runtime setup script documented in README.md')
+        .replace(/(?:Veridise\s*\/\s*)?picus/gi, 'State Verifier');
+}
+
 /* Display arithmetic modulo the file's own prime, without Number conversion. */
 function formatR1CSCombination(terms, prime, signed = true) {
     const parts = [];
@@ -17,7 +25,7 @@ function formatR1CSCombination(terms, prime, signed = true) {
 }
 
 function r1csCheckDisplayMessage(check) {
-    if (check.status !== 'unknown') return check.message || 'No additional details.';
+    if (check.status !== 'unknown') return verifierDisplayText(check.message || 'No additional details.');
     return 'No anomalies detected during this run.';
 }
 
@@ -119,14 +127,14 @@ class R1CSViewer {
         this.mode.value = state.signed ? 'signed' : 'raw';
         const hint = this.panel.querySelector('.r1cs-analysis-hint');
         if (hint) {
-            hint.textContent = 'Engine: Picus · Checking environment…';
+            hint.textContent = 'Engine: State Verifier · Checking environment…';
             fetch('/r1cs/engine').then(response => response.json()).then(info => {
                 if (this.state !== state) return;
                 hint.textContent = info.ready
-                    ? `${info.platform === 'windows-native' ? 'Native Windows ' : ''}Picus + cvc5 · Analyze runs uniqueness, satisfiability and structural checks.`
-                    : info.reason;
+                    ? `${info.platform === 'windows-native' ? 'Native Windows ' : ''}State Verifier + cvc5 · Analyze runs uniqueness, satisfiability and structural checks.`
+                    : verifierDisplayText(info.reason);
             }).catch(() => {
-                if (this.state === state) hint.textContent = 'Could not check the Picus environment. Check the web service.';
+                if (this.state === state) hint.textContent = 'Could not check the State Verifier environment. Check the web service.';
             });
         }
         this.load(state.offset);
@@ -157,7 +165,7 @@ class R1CSViewer {
             this.renderPage(page);
         } catch (error) {
             if (error.name === 'AbortError' || this.state !== state || revision !== this.revision) return;
-            status.textContent = error.message;
+            status.textContent = verifierDisplayText(error.message);
             status.classList.add('error-text');
         }
     }
@@ -189,7 +197,7 @@ class R1CSViewer {
 function renderR1CSReport(container, report) {
     const outcomes = {
         safe: {style: 'success', level: 'Success', message: 'Output uniqueness verified.'},
-        unsafe: {style: 'warning', level: 'Warning', message: 'Picus found an underconstrained circuit.'},
+        unsafe: {style: 'warning', level: 'Warning', message: 'State Verifier found an underconstrained circuit.'},
         unknown: {style: 'warning', level: 'Warning', message: 'Output uniqueness could not be determined.'},
         error: {style: 'error', level: 'Error', message: 'Analysis did not complete.'},
         cancelled: {style: 'info', level: 'Info', message: 'Analysis cancelled by the user.'},
@@ -222,15 +230,15 @@ function renderR1CSReport(container, report) {
         timeout: 'The task time limit was reached without a conclusion.',
         solver_inconclusive: 'The solver could not reach a conclusion within its query budget.',
         no_outputs: 'Output uniqueness was not checked because this file has no public outputs.',
-        invalid_output: 'Picus returned an invalid or incomplete response. See the run logs.',
-        process_error: 'Picus or the solver failed. See the run logs.',
-        supervisor_error: 'The Picus supervisor ended unexpectedly. See the run logs.',
-        runtime_error: 'Could not run Picus. Check the installation and run logs.',
+        invalid_output: 'State Verifier returned an invalid or incomplete response. See the run logs.',
+        process_error: 'State Verifier or the solver failed. See the run logs.',
+        supervisor_error: 'The State Verifier supervisor ended unexpectedly. See the run logs.',
+        runtime_error: 'Could not run State Verifier. Check the installation and run logs.',
     };
     const logLine = (level, message) => `[${level}]`.padEnd(13) + message;
     const lines = [
         logLine('Info', `File: ${report.filename || 'Not provided'}`),
-        logLine('Info', `Engine: Picus | Solver: ${report.solver || 'cvc5'}`),
+        logLine('Info', `Engine: State Verifier | Solver: ${report.solver || 'cvc5'}`),
         logLine('Info', checks ? 'Uniqueness, satisfiability and structural checks.'
             : 'Checking output uniqueness for identical public and private inputs.'),
     ];
@@ -301,12 +309,12 @@ function renderR1CSReport(container, report) {
                 values => values[1] != null && values[2] != null && values[1] !== values[2]);
             if (cex.truncated) container.append(element('p', 'Only the first 500 variables in each group are shown.'));
         } else {
-            container.append(element('p', 'Picus reported underconstraint, but the counterexample could not be formatted. See the raw run logs.'));
+            container.append(element('p', 'State Verifier reported underconstraint, but the counterexample could not be formatted. See the run logs.'));
         }
     }
     const details = element('details', '', 'picus-logs');
-    details.append(element('summary', 'Run details and raw logs'));
-    const runDetails = [logLine('Info', 'Engine: Veridise/Picus')];
+    details.append(element('summary', 'Run details and engine logs'));
+    const runDetails = [logLine('Info', 'Engine: State Verifier')];
     if (Number.isFinite(report.analysis_budget_seconds)) {
         runDetails.push(logLine('Info', `Allocated analysis budget: ${report.analysis_budget_seconds.toFixed(2)} s`));
     }
@@ -317,7 +325,7 @@ function renderR1CSReport(container, report) {
         runDetails.push(logLine('Info', `Original analysis result: ${verdict}`));
         for (const check of checks || []) {
             if (check.status === 'unknown') {
-                runDetails.push(logLine('Unknown', `${check.name || check.id}: ${check.message || 'No conclusion.'}`));
+                runDetails.push(logLine('Unknown', `${check.name || check.id}: ${verifierDisplayText(check.message || 'No conclusion.')}`));
                 if (check.reason) runDetails.push(logLine('Info', `${check.name || check.id} reason: ${check.reason}`));
             }
         }
@@ -326,7 +334,7 @@ function renderR1CSReport(container, report) {
     if (report.exit_code != null) runDetails.push(logLine('Info', `Exit code: ${report.exit_code}`));
     if (report.reason) runDetails.push(logLine('Info', `Reason: ${report.reason}`));
     details.append(element('pre', runDetails.join('\n')));
-    details.append(element('pre', (report.logs || []).join('\n') || 'No run logs available.', 'picus-raw-log'));
+    details.append(element('pre', verifierDisplayText((report.logs || []).join('\n')) || 'No run logs available.', 'picus-raw-log'));
     if (report.logs_truncated) details.append(element('p', 'Only the latest 1,000 log entries are retained, with up to 1,000 characters per entry.'));
     container.append(details);
 }

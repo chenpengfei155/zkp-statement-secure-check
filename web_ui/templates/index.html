@@ -647,7 +647,7 @@
                                     original signal names and actual input values are unavailable.</p>
                             </div>
                         </details>
-                        <p class="r1cs-analysis-hint">Picus + cvc5 · Analyze runs uniqueness, satisfiability and structural checks.</p>
+                        <p class="r1cs-analysis-hint">State Verifier + cvc5 · Analyze runs uniqueness, satisfiability and structural checks.</p>
                         <div class="r1cs-toolbar">
                             <div class="r1cs-section-title">Constraints <span class="r1cs-equation-form">A × B − C = 0</span></div>
                             <div class="r1cs-toolbar-actions">
@@ -688,7 +688,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/clike/clike.min.js"></script>
-    <script src="{{ url_for('static', filename='r1cs.js', v='r1cs-timing-1') }}"></script>
+    <script src="{{ url_for('static', filename='r1cs.js', v='state-verifier-1') }}"></script>
     <script>
         // Nginx mounts this app below /zkp/ while Flask still receives the
         // stripped path.  Keep every browser request inside that mount.
@@ -1101,18 +1101,18 @@
             progressContainer.style.display = isR1CS ? 'block' : 'none';
             progressBar.style.width = '0%';
             progressBar.textContent = '0%';
-            progressText.textContent = isR1CS ? 'Checking Picus environment…' : 'Starting analysis...';
+            progressText.textContent = isR1CS ? 'Checking State Verifier environment…' : 'Starting analysis...';
             if (isR1CS) {
                 const started = Date.now();
                 sourceState.analysisStarted = started;
-                let stage = 'Checking Picus environment';
+                let stage = 'Checking State Verifier environment';
                 progressBar.classList.add('picus-running');
                 progressBar.style.width = '100%';
-                progressBar.textContent = 'Picus';
+                progressBar.textContent = 'State Verifier';
                 analysisTimer = setInterval(() => {
                     progressText.textContent = `${stage} · ${Math.floor((Date.now() - started) / 1000)}s`;
                 }, 500);
-                sourceState.setAnalysisStage = value => { stage = value; };
+                sourceState.setAnalysisStage = value => { stage = verifierDisplayText(value); };
             }
             progressLog.innerHTML = '';
             
@@ -1159,7 +1159,7 @@
                         const progressData = message.data;
                         if (isR1CS) {
                             if (sourceState.setAnalysisStage) sourceState.setAnalysisStage(progressData.message);
-                            progressText.textContent = `${progressData.message} · ${progressData.elapsed_seconds}s`;
+                            progressText.textContent = `${verifierDisplayText(progressData.message)} · ${progressData.elapsed_seconds}s`;
                             return;
                         }
                         
@@ -1347,7 +1347,7 @@
             }
             result.className = 'result ' + type;
             const title = type === 'error' ? '❌ Error' : type === 'info' ? 'File Upload' : 'Analysis Result';
-            result.innerHTML = '<h3>' + title + '</h3><pre>' + escapeHtml(message) + '</pre>';
+            result.innerHTML = '<h3>' + title + '</h3><pre>' + escapeHtml(verifierDisplayText(message)) + '</pre>';
             result.style.display = 'block';
         }
         
