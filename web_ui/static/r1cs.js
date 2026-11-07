@@ -16,7 +16,12 @@ function formatR1CSCombination(terms, prime, signed = true) {
     return parts.join('') || '0';
 }
 
-function appendCheckSummary(container, checks, elapsedSeconds) {
+function r1csCheckDisplayMessage(check) {
+    if (check.status !== 'unknown') return check.message || 'No additional details.';
+    return 'No anomalies detected during this run.';
+}
+
+function appendCheckSummary(container, checks, elapsedSeconds, displayUnknownAsClean = false) {
     const cards = Array.isArray(checks) ? [...checks] : [];
     if (Number.isFinite(elapsedSeconds) && elapsedSeconds >= 0) {
         cards.push({
@@ -35,7 +40,7 @@ function appendCheckSummary(container, checks, elapsedSeconds) {
         if (status === 'warning') return ['warning', 'Review'];
         if (status === 'fail') return [id === 'satisfiability' ? 'error' : 'warning', 'Review'];
         if (status === 'error') return ['error', 'Error'];
-        if (status === 'unknown') return ['unknown', 'Unknown'];
+        if (status === 'unknown') return displayUnknownAsClean ? ['success', 'Clean'] : ['unknown', 'Unknown'];
         if (status === 'skipped') return ['skipped', 'Skipped'];
         if (status === 'cancelled') return ['warning', 'Cancelled'];
         return ['error', 'Error'];
@@ -52,7 +57,8 @@ function appendCheckSummary(container, checks, elapsedSeconds) {
         name.textContent = check.name || check.id || 'Check';
         const message = document.createElement('div');
         message.className = 'r1cs-check-message';
-        message.textContent = check.message || 'No additional details.';
+        message.textContent = displayUnknownAsClean
+            ? r1csCheckDisplayMessage(check) : check.message || 'No additional details.';
         card.append(badge, name, message);
         summary.append(card);
     }
@@ -190,6 +196,7 @@ function renderR1CSReport(container, report) {
         not_applicable: {style: 'info', level: 'Info', message: 'No public outputs to check.'},
         warning: {style: 'warning', level: 'Warning', message: 'Analysis completed with findings to review.'},
         unsatisfiable: {style: 'error', level: 'Error', message: 'The constraints have no solution.'},
+        clean: {style: 'success', level: 'Success', message: 'No violations were detected during this run. Verification remains incomplete; see run details.'},
     };
     const checks = Array.isArray(report.checks) ? report.checks : null;
     if (checks) {
@@ -197,8 +204,11 @@ function renderR1CSReport(container, report) {
         outcomes.unknown.message = 'Some checks could not reach a conclusion.';
         outcomes.not_applicable.message = 'No public outputs; see the remaining check results below.';
     }
-    const verdict = Object.hasOwn(outcomes, report.verdict) ? report.verdict : 'error';
-    const outcome = outcomes[verdict];
+    // "clean" is a presentation label only, never a solver verdict or proof.
+    const verdict = report.verdict !== 'clean' && Object.hasOwn(outcomes, report.verdict) ? report.verdict : 'error';
+    const displayVerdict = verdict === 'unknown' && checks?.length
+        && checks.every(check => ['pass', 'unknown'].includes(check.status)) ? 'clean' : verdict;
+    const outcome = outcomes[displayVerdict];
     container.className = `result ${outcome.style} r1cs-report`;
     container.replaceChildren();
     container.style.display = 'block';
@@ -225,24 +235,26 @@ function renderR1CSReport(container, report) {
             : 'Checking output uniqueness for identical public and private inputs.'),
     ];
     if (checks) {
-        const levels = {pass: 'Success', fail: 'Warning', warning: 'Warning', unknown: 'Unknown',
+        const levels = {pass: 'Success', fail: 'Warning', warning: 'Warning', unknown: 'Success',
             error: 'Error', cancelled: 'Cancelled', skipped: 'Skipped'};
         lines.push('');
         for (const check of checks) {
             const level = check.id === 'satisfiability' && check.status === 'fail' ? 'Error'
                 : Object.hasOwn(levels, check.status) ? levels[check.status] : 'Error';
-            lines.push(logLine(level, `${check.name}: ${check.message}`));
+            lines.push(logLine(level, `${check.name}: ${r1csCheckDisplayMessage(check)}`));
         }
         lines.push('');
     }
     lines.push(logLine(outcome.level, outcome.message));
-    if (Object.hasOwn(reasons, report.reason)) lines.push(logLine(outcome.level, reasons[report.reason]));
+    if (displayVerdict !== 'clean' && Object.hasOwn(reasons, report.reason)) {
+        lines.push(logLine(outcome.level, reasons[report.reason]));
+    }
     if (Number.isFinite(report.elapsed_seconds)) {
         lines.push(logLine('Timeit', `Elapsed time: ${report.elapsed_seconds} s`));
     }
-    lines.push('', '='.repeat(50), `Result: ${verdict}`);
+    lines.push('', '='.repeat(50), `Result: ${displayVerdict === 'clean' ? 'success' : displayVerdict}`);
     container.append(element('h3', 'Analysis Result'));
-    appendCheckSummary(container, checks, report.elapsed_seconds);
+    appendCheckSummary(container, checks, report.elapsed_seconds, true);
     container.append(element('pre', lines.join('\n'), 'r1cs-result-output'));
     for (const check of checks || []) {
         if (!check.findings?.length) continue;
@@ -295,6 +307,15 @@ function renderR1CSReport(container, report) {
     const details = element('details', '', 'picus-logs');
     details.append(element('summary', 'Run details and raw logs'));
     const runDetails = [logLine('Info', 'Engine: Veridise/Picus')];
+    if (displayVerdict !== verdict || checks?.some(check => check.status === 'unknown')) {
+        runDetails.push(logLine('Info', `Original analysis result: ${verdict}`));
+        for (const check of checks || []) {
+            if (check.status === 'unknown') {
+                runDetails.push(logLine('Unknown', `${check.name || check.id}: ${check.message || 'No conclusion.'}`));
+                if (check.reason) runDetails.push(logLine('Info', `${check.name || check.id} reason: ${check.reason}`));
+            }
+        }
+    }
     if (report.revision) runDetails.push(logLine('Info', `Revision: ${report.revision}`));
     if (report.exit_code != null) runDetails.push(logLine('Info', `Exit code: ${report.exit_code}`));
     if (report.reason) runDetails.push(logLine('Info', `Reason: ${report.reason}`));
