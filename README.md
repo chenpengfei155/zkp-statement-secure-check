@@ -332,7 +332,11 @@ is recommended; incompatible optimized input counts require recompilation.
 Custom gates are unsupported. Source recovery, proof generation, CLI and folder
 R1CS analysis are outside this feature.
 
-Defaults: 5 seconds per solver query, 120 seconds per task, 4 GiB per child process
+Defaults: 5 seconds per solver query, a real analysis budget sampled between 180 and
+195 seconds per task, and a 200-second total analysis limit including process cleanup.
+Fast tasks return immediately and displayed durations are measured, not randomized.
+Upload/validation and the separate runtime-readiness probe precede this budget.
+The memory limit is 4 GiB per child process
 (committed memory on Windows; address space on Linux), and one R1CS task at a time. After satisfiability,
 output uniqueness receives half the remaining task time, reserving time for
 strong mode. Structural checks have work limits and display partial coverage

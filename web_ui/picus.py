@@ -14,12 +14,14 @@ import tempfile
 from .picus_worker import REVISION, SCOPE
 from .r1cs_checks import CHECK_NAMES, aggregate, check_result
 from .picus_runtime import default_home
+from .r1cs_timing import (MAX_TASK_SECONDS, MAX_ANALYSIS_SECONDS, CANCEL_GRACE_SECONDS,
+                          CLEANUP_SECONDS, analysis_budget)
 
 
 @dataclass(frozen=True)
 class PicusConfig:
     home: str = field(default_factory=default_home)
-    timeout_seconds: float = 120
+    timeout_seconds: float = MAX_ANALYSIS_SECONDS
     query_timeout_ms: int = 5000
     memory_mib: int = 4096
 
@@ -109,13 +111,27 @@ class PicusEngine:
             raise RuntimeError(self.configuration_error)
         if cancelled():
             return empty_report('cancelled', 'cancelled')
+        started = time.monotonic()
+        budget = analysis_budget(self.config.timeout_seconds)
         with tempfile.TemporaryDirectory(prefix='cirverify_picus_') as job:
-            return self._analyze_in_directory(reader, cancelled=cancelled, progress=progress, job=job)
+            report = self._analyze_in_directory(reader, cancelled=cancelled, progress=progress,
+                                               job=job, started=started, budget=budget)
+        # Include process startup, cancellation and temporary-directory cleanup.
+        # Never clamp or randomize the measured duration to match a target.
+        report['elapsed_seconds'] = round(time.monotonic() - started, 2)
+        report['analysis_budget_seconds'] = budget
+        report['total_budget_seconds'] = MAX_TASK_SECONDS
+        return report
 
-    def _analyze_in_directory(self, reader, *, cancelled, progress, job):
+    def _analyze_in_directory(self, reader, *, cancelled, progress, job, started, budget):
         config = self.config
+        hard_deadline = started + MAX_TASK_SECONDS - 0.5
+        analysis_deadline = started + budget
+        # Leave time to kill/reap a stuck supervisor before the total limit.
+        force_deadline = min(analysis_deadline + CANCEL_GRACE_SECONDS,
+                             hard_deadline - CLEANUP_SECONDS)
         command = self.command('run') + ['--file', str(Path(reader.path).resolve()), '--job-dir', job,
-                   '--timeout-seconds', str(config.timeout_seconds),
+                   '--timeout-seconds', str(max(0.001, analysis_deadline - time.monotonic())),
                    '--query-timeout-ms', str(config.query_timeout_ms),
                    '--memory-mib', str(config.memory_mib)]
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -142,7 +158,6 @@ class PicusEngine:
                    threading.Thread(target=read, args=(process.stderr, True), daemon=True)]
         for thread in threads:
             thread.start()
-        started = time.monotonic()
         sent_cancel = False
         cancelled_at = None
         timed_out = False
@@ -150,20 +165,26 @@ class PicusEngine:
         report = None
         try:
             while ended < 2 or process.poll() is None:
-                elapsed = time.monotonic() - started
-                if (cancelled() or elapsed > config.timeout_seconds + 10) and not sent_cancel:
-                    timed_out = not cancelled()
+                now = time.monotonic()
+                user_cancelled = cancelled()
+                # The worker owns its ordinary deadline. Allow it to publish
+                # completed checks, but do not add the previous 10+10s waits.
+                if (user_cancelled or now >= analysis_deadline + 0.5) and not sent_cancel:
+                    timed_out = not user_cancelled
                     sent_cancel = True
-                    cancelled_at = time.monotonic()
+                    cancelled_at = now
                     try:
                         process.stdin.write(b'cancel\n')
                         process.stdin.flush()
                     except (BrokenPipeError, OSError):
                         pass
-                if cancelled_at is not None and time.monotonic() - cancelled_at > 10:
-                    report = empty_report('unknown' if timed_out else 'cancelled',
-                                          'timeout' if timed_out else 'cancelled')
-                    return report
+                if now >= force_deadline or (cancelled_at is not None
+                                             and now - cancelled_at >= CANCEL_GRACE_SECONDS):
+                    timed_out = not user_cancelled
+                    if report is None:
+                        report = empty_report('unknown' if timed_out else 'cancelled',
+                                              'timeout' if timed_out else 'cancelled')
+                    break
                 try:
                     line, stderr = messages.get(timeout=0.1)
                 except queue.Empty:
@@ -189,14 +210,21 @@ class PicusEngine:
                             raise ValueError('Unexpected supervisor event')
                     except (ValueError, KeyError, TypeError):
                         invalid = True
-            process.wait(timeout=5)
-            if process.returncode or report is None or invalid:
+            if not sent_cancel and not timed_out:
+                process.wait(timeout=max(0.001, min(CLEANUP_SECONDS, hard_deadline - time.monotonic())))
+            if (process.returncode and not sent_cancel and not timed_out) or report is None or invalid:
                 report = empty_report('error', 'supervisor_error')
                 report['logs'] = diagnostic or ['Picus returned an incomplete or invalid response.']
             if cancelled():
                 report['verdict'], report['reason'] = 'cancelled', 'cancelled'
             elif timed_out:
-                report['verdict'], report['reason'] = 'unknown', 'timeout'
+                for check in report['checks']:
+                    if check['status'] == 'cancelled':
+                        check.update(status='unknown', reason='timeout', message='Task time limit reached.')
+                no_outputs = any(c.get('reason') == 'no_outputs' for c in report['checks'])
+                report['verdict'], report['reason'] = aggregate(report['checks'], no_outputs)
+                if report['verdict'] == 'unknown':
+                    report['reason'] = 'timeout'
             return report
         finally:
             # EOF requests graceful cleanup. If the worker must be killed,
@@ -205,13 +233,12 @@ class PicusEngine:
                 process.stdin.close()
             except OSError:
                 pass
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
+            cleanup_deadline = min(hard_deadline, time.monotonic() + CLEANUP_SECONDS)
+            if process.poll() is None:
                 process.kill()
-                process.wait(timeout=5)
+            process.wait(timeout=max(0.001, cleanup_deadline - time.monotonic()))
             stop_reader.set()
             for thread in threads:
-                thread.join(timeout=2)
+                thread.join(timeout=max(0, cleanup_deadline - time.monotonic()))
             process.stdout.close()
             process.stderr.close()

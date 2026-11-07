@@ -28,6 +28,7 @@ from cirverify.r1cs import R1CSFile
 from web_ui.r1cs_checks import (CHECK_NAMES, aggregate, check_result, prepare_checks,
                                write_satisfiability_query, verified_pair_uniqueness)
 from web_ui.r1cs_witness import find_verified_assignment
+from web_ui.r1cs_timing import MAX_ANALYSIS_SECONDS
 from web_ui.r1cs_uniqueness import prove_uniqueness
 from web_ui.picus_runtime import REVISION, CVC5_REVISION, default_home, picus_command, solver_path, validate_runtime
 
@@ -365,7 +366,7 @@ def run(args):
         cancelled.set()  # EOF means the Windows owner disappeared.
     threading.Thread(target=control, daemon=True).start()
     prefix = Path(args.home).expanduser().resolve()
-    deadline = started + args.timeout_seconds
+    deadline = started + min(args.timeout_seconds, MAX_ANALYSIS_SECONDS)
     checks = {key: check_result(key, 'skipped', 'Check did not run.', reason='not_started')
               for key in CHECK_NAMES}
     no_outputs = False
@@ -529,7 +530,7 @@ def main():
     parser.add_argument('--home', default=default_home())
     parser.add_argument('--file')
     parser.add_argument('--job-dir')
-    parser.add_argument('--timeout-seconds', type=float, default=120)
+    parser.add_argument('--timeout-seconds', type=float, default=MAX_ANALYSIS_SECONDS)
     parser.add_argument('--query-timeout-ms', type=int, default=5000)
     parser.add_argument('--memory-mib', type=int, default=4096)
     args = parser.parse_args()

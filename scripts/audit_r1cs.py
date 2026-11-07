@@ -214,7 +214,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--r1cs', type=Path, default=ROOT / 'benchmarks/r1cs')
     parser.add_argument('--output', type=Path, default=ROOT / 'build/r1cs-audit')
-    parser.add_argument('--timeout', type=float, default=120, help='Native engine budget per file (seconds).')
+    parser.add_argument('--timeout', type=float, default=PicusConfig().timeout_seconds,
+                        help='Analysis budget ceiling (capped at 195s; ordinary tasks randomize within the last 15s).')
     parser.add_argument('--worker-timeout', type=float, default=420, help='Validation plus analysis budget (seconds).')
     parser.add_argument('--query-timeout-ms', type=int, default=5000)
     parser.add_argument('--memory-mib', type=int, default=4096, help='Windows limit per process, not aggregate job memory.')

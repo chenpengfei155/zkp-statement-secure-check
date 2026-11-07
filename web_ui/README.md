@@ -168,11 +168,23 @@ Set these **server-side environment variables** before starting Flask:
 | Variable | Default |
 |---|---|
 | `CIRVERIFY_PICUS_HOME` | Windows: `<project>/.tools/picus`; Linux: `~/.local/share/cirverify-picus` |
-| `CIRVERIFY_PICUS_TIMEOUT` | `120` seconds per task |
+| `CIRVERIFY_PICUS_TIMEOUT` | `195` seconds (analysis budget ceiling; capped at 195) |
 | `CIRVERIFY_PICUS_QUERY_TIMEOUT_MS` | `5000` milliseconds per solver query |
 | `CIRVERIFY_PICUS_MEMORY_MIB` | `4096` per child process (Windows committed memory; Linux address space) |
 
-The 120-second budget covers the entire five-check task. When needed, the standalone cvc5
+Each task samples one actual analysis budget uniformly between **180 and 195 seconds**
+by default. A lower configured ceiling is respected: the sampling range is the last
+15 seconds below that ceiling, narrowed to at most half the ceiling; explicit limits
+of 15 seconds or less are used unchanged. Values above 195 cannot extend the limit.
+The supervisor enforces a **200-second total analysis limit**, with time reserved for
+cancellation and process cleanup. Fast tasks return immediately; no artificial delay
+or random elapsed-time value is added. Reported elapsed time includes worker startup,
+analysis and cleanup. File upload/validation and the separate runtime-readiness probe
+occur before this analysis budget. The allocated budget is recorded in the report
+and under **Run details and raw logs**. Near the deadline, repeated runs may complete
+different checks; a shorter budget can leave more checks inconclusive.
+
+The shared analysis budget covers the entire five-check task. When needed, the standalone cvc5
 satisfiability query uses the same 5-second query limit (plus a two-second
 process watchdog allowance). Output uniqueness gets half the time remaining
 after that stage; strong mode gets the rest. Each stage uses a Windows Job Object

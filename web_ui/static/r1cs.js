@@ -307,6 +307,12 @@ function renderR1CSReport(container, report) {
     const details = element('details', '', 'picus-logs');
     details.append(element('summary', 'Run details and raw logs'));
     const runDetails = [logLine('Info', 'Engine: Veridise/Picus')];
+    if (Number.isFinite(report.analysis_budget_seconds)) {
+        runDetails.push(logLine('Info', `Allocated analysis budget: ${report.analysis_budget_seconds.toFixed(2)} s`));
+    }
+    if (Number.isFinite(report.total_budget_seconds)) {
+        runDetails.push(logLine('Info', `Total analysis and cleanup limit: ${report.total_budget_seconds} s`));
+    }
     if (displayVerdict !== verdict || checks?.some(check => check.status === 'unknown')) {
         runDetails.push(logLine('Info', `Original analysis result: ${verdict}`));
         for (const check of checks || []) {
